@@ -53,6 +53,7 @@
                 Hitsound = false,
                 HitsoundVolume = 0.3,
                 SpoofNames = false,
+                AntiAFK = true,
                 KillEffect = false,
                 ModelChanger = false,
                 SelectedSkinID = "135336389839889",
@@ -357,26 +358,33 @@
             end
             local function GetSmartTargetPart(character)
                 if not character then return nil end
-                -- Si en Auto Farm : cibler UNIQUEMENT la tête (Head)
+                -- Si en Auto Farm : toujours cibler uniquement la tête (Head)
                 if AutoFarmSettings.Enabled then
                     return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
                 end
+
                 local hitboxParts = {
-                    {name = "Head", priority = 1},
-                    {name = "UpperTorso", priority = 2},
-                    {name = "LowerTorso", priority = 3},
-                    {name = "HumanoidRootPart", priority = 4}
+                    "Head",
+                    "UpperTorso",
+                    "LowerTorso",
+                    "HumanoidRootPart"
                 }
-                local mousePos = UserInputService:GetMouseLocation()
-                local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+                -- Détermine le point de visée (crosshair / souris)
+                local aimPoint = UserInputService:GetMouseLocation()
+                if not aimPoint or aimPoint.Magnitude == 0 then
+                    aimPoint = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                end
+
                 local closestPart = nil
                 local closestDistance = math.huge
-                for _, partInfo in ipairs(hitboxParts) do
-                    local part = character:FindFirstChild(partInfo.name)
+
+                for _, partName in ipairs(hitboxParts) do
+                    local part = character:FindFirstChild(partName)
                     if part then
                         local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
                         if onScreen then
-                            local distance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                            local distance = (Vector2.new(screenPos.X, screenPos.Y) - aimPoint).Magnitude
                             if distance < closestDistance then
                                 closestDistance = distance
                                 closestPart = part
@@ -384,28 +392,30 @@
                         end
                     end
                 end
+
                 return closestPart or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
             end
             UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 if gameProcessed then return end
                 if input.UserInputType == Enum.UserInputType.MouseButton1 and AimbotSettings.SilentAimEnabled then
-                    local targetPlayer = GetClosestTarget()
-                    if targetPlayer and targetPlayer.Character then
-                        local character = targetPlayer.Character
-                        local savedCameraCFrame = Camera.CFrame
-                        task.spawn(function()
-                            while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) and AimbotSettings.SilentAimEnabled do
+                    local savedCameraCFrame = Camera.CFrame
+                    task.spawn(function()
+                        while UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) and AimbotSettings.SilentAimEnabled do
+                            -- Actualise la cible dynamiquement à chaque frame / tir !
+                            local currentTarget = GetClosestTarget()
+                            if currentTarget and currentTarget.Character then
+                                local character = currentTarget.Character
                                 local smartPart = GetSmartTargetPart(character)
                                 if smartPart and smartPart.Parent then
                                     local targetPos = smartPart.Position
                                     local aimCFrame = CFrame.lookAt(Camera.CFrame.Position, targetPos)
                                     Camera.CFrame = aimCFrame
                                 end
-                                task.wait()
                             end
-                            Camera.CFrame = savedCameraCFrame
-                        end)
-                    end
+                            task.wait()
+                        end
+                        Camera.CFrame = savedCameraCFrame
+                    end)
                 end
             end)
             local HitsoundSound = Instance.new("Sound")
@@ -2568,12 +2578,40 @@ local function ApplySpeedHack()
                 sliderFill = Color3.fromRGB(80, 200, 255),
                 sliderBg   = Color3.fromRGB(55, 55, 55),
             }
+            local function GetSafeGuiParent()
+                local parent = nil
+                pcall(function()
+                    if gethui then
+                        parent = gethui()
+                    elseif syn and syn.protect_gui then
+                        parent = game:GetService("CoreGui")
+                    else
+                        parent = game:GetService("CoreGui")
+                    end
+                end)
+                if not parent then
+                    parent = LocalPlayer:WaitForChild("PlayerGui")
+                end
+                return parent
+            end
+
             local oldGui = LocalPlayer.PlayerGui:FindFirstChild("UrbanReloadMenu")
             if oldGui then oldGui:Destroy() end
-            local ScreenGui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
+            pcall(function()
+                local cgGui = game:GetService("CoreGui"):FindFirstChild("UrbanReloadMenu")
+                if cgGui then cgGui:Destroy() end
+            end)
+
+            local ScreenGui = Instance.new("ScreenGui")
             ScreenGui.Name = "UrbanReloadMenu"
             ScreenGui.ResetOnSpawn = false
-            ScreenGui.DisplayOrder = 5
+            ScreenGui.DisplayOrder = 999
+            pcall(function()
+                if syn and syn.protect_gui then
+                    syn.protect_gui(ScreenGui)
+                end
+            end)
+            ScreenGui.Parent = GetSafeGuiParent()
             local Window = Instance.new("Frame", ScreenGui)
             Window.Size = UDim2.new(0, 580, 0, 450)
             Window.Position = UDim2.new(0.5, -290, 0.5, -225)
@@ -3203,6 +3241,64 @@ local function ApplySpeedHack()
                     print("❌ Kill Effect Halloween désactivé")
                 end
             end)
+
+            -- 🛡️ ANTI AFK ROBUSTE
+            local AntiAfkConnection = nil
+            local AntiAfkThread = nil
+
+            local function EnableAntiAFK()
+                if not AntiAfkConnection then
+                    AntiAfkConnection = LocalPlayer.Idled:Connect(function()
+                        if MiscSettings.AntiAFK then
+                            local VirtualUser = game:GetService("VirtualUser")
+                            VirtualUser:CaptureController()
+                            VirtualUser:ClickButton2(Vector2.new())
+                            print("🛡️ [Anti-AFK] Signal Idled bloqué avec succès !")
+                        end
+                    end)
+                end
+
+                if not AntiAfkThread then
+                    AntiAfkThread = task.spawn(function()
+                        while true do
+                            task.wait(60) -- pulsation préventive toutes les 60 secondes
+                            if MiscSettings.AntiAFK then
+                                pcall(function()
+                                    local VirtualUser = game:GetService("VirtualUser")
+                                    VirtualUser:CaptureController()
+                                    VirtualUser:ClickButton2(Vector2.new())
+                                end)
+                            end
+                        end
+                    end)
+                end
+            end
+
+            local function DisableAntiAFK()
+                if AntiAfkConnection then
+                    AntiAfkConnection:Disconnect()
+                    AntiAfkConnection = nil
+                end
+                if AntiAfkThread then
+                    task.cancel(AntiAfkThread)
+                    AntiAfkThread = nil
+                end
+            end
+
+            AddToggle(gbOther, "🛡️ Anti AFK", MiscSettings.AntiAFK, function(v)
+                MiscSettings.AntiAFK = v
+                if v then
+                    EnableAntiAFK()
+                    print("✅ Anti AFK activé")
+                else
+                    DisableAntiAFK()
+                    print("❌ Anti AFK désactivé")
+                end
+            end)
+
+            if MiscSettings.AntiAFK then
+                EnableAntiAFK()
+            end
             local gbAutoFarm = AddGroupbox(TabAutoFarm.left, "🤖 Bot Farming")
             local toggleAutoFarmUI
             toggleAutoFarmUI = AddToggle(gbAutoFarm, "Enable Auto Farm [X]", AutoFarmSettings.Enabled, function(v) 
