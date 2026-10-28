@@ -53,11 +53,27 @@
                 Hitsound = false,
                 HitsoundVolume = 0.3,
                 SpoofNames = false,
+                RollSkip = false,
+                UpChance = false,
                 AntiAFK = true,
                 KillEffect = false,
                 ModelChanger = false,
-                SelectedSkinID = "135336389839889",
-                SkinOffsetY = 2.5
+                SelectedSkinID = "101326635064310",
+                SkinOffsetY = 0,
+                HalloweenAutoClaim = false,
+                HalloweenSpoofQuests = false,
+                HalloweenGhostESP = false,
+                HalloweenBulletTracer = false
+            }
+            local KillEffectsSettings = {
+                Enabled = false,
+                SelectedEffect = "Halloween",
+                ApplyToAll = true,
+                OnlyMyKills = false,
+                ApplyToBots = true,
+                PlaySound = true,
+                SoundVolume = 0.8,
+                EffectDuration = 5
             }
             local AutoFarmSettings = {
                 Enabled = false,
@@ -67,10 +83,12 @@
                 AutoE = true,
                 NPCSpeed = 20,
                 NPCHealth = 25,
+                MaxKillDistance = 15,
                 PullNPCs = false,
                 FreezeNPCs = false
             }
             local BotESPObjects = {}
+            local GetBots = nil
             local SavedSettings = {
                 ESP = {},
                 Aimbot = {},
@@ -218,16 +236,19 @@
                         local myPos = myChar.HumanoidRootPart.Position
                         local closestBot = nil
                         local closestDistance = math.huge
-                        for bot, esp in pairs(BotESPObjects) do
-                            if bot and bot.Parent and esp.rootPart and esp.rootPart.Parent then
+                        local botList = (GetBots and GetBots()) or {}
+                        for _, bot in ipairs(botList) do
+                            if bot and bot.Parent then
+                                local rootPart = bot:FindFirstChild("HumanoidRootPart")
                                 local humanoid = bot:FindFirstChildOfClass("Humanoid")
-                                if humanoid and humanoid.Health > 0 then
+                                if rootPart and humanoid and humanoid.Health > 0 then
                                     local state = humanoid:GetState()
                                     if state ~= Enum.HumanoidStateType.Dead and 
                                        state ~= Enum.HumanoidStateType.Physics and
                                        state ~= Enum.HumanoidStateType.None then
-                                        local distance = (esp.rootPart.Position - myPos).Magnitude
-                                        if distance < closestDistance and distance <= 300 then
+                                        local distance = (rootPart.Position - myPos).Magnitude
+                                        local maxDist = AutoFarmSettings.MaxKillDistance or 15
+                                        if distance < closestDistance and distance <= maxDist then
                                             closestBot = bot
                                             closestDistance = distance
                                         end
@@ -952,19 +973,40 @@
             end
                 end
             end
-local function GetBots()
+GetBots = function()
     local bots = {}
-    local hoodLocal = workspace:FindFirstChild("HoodLocal")
-    if not hoodLocal then return bots end
-    for _, model in pairs(hoodLocal:GetChildren()) do
-        if model:IsA("Model") and model.Name:match("^Hood%d+") then
-            local humanoid = model:FindFirstChildOfClass("Humanoid")
-            local rootPart = model:FindFirstChild("HumanoidRootPart")
-            if humanoid and rootPart and humanoid.Health > 0 then
-                table.insert(bots, model)
+    local seen = {}
+
+    local function considerModel(model)
+        if not model or not model:IsA("Model") or seen[model] then return end
+        if Players:GetPlayerFromCharacter(model) then return end
+        local humanoid = model:FindFirstChildOfClass("Humanoid")
+        local rootPart = model:FindFirstChild("HumanoidRootPart")
+        if humanoid and rootPart and humanoid.Health > 0 then
+            seen[model] = true
+            table.insert(bots, model)
+        end
+    end
+
+    local candidateFolders = {"HoodLocal", "Zombies", "ZombieLocal", "NPCs", "Bots"}
+    for _, folderName in ipairs(candidateFolders) do
+        local folder = workspace:FindFirstChild(folderName)
+        if folder then
+            for _, child in pairs(folder:GetChildren()) do
+                considerModel(child)
             end
         end
     end
+
+    for _, child in pairs(workspace:GetChildren()) do
+        if child:IsA("Model") then
+            local name = child.Name
+            if name:match("^Zombie") or name:match("^Hood") or name:match("^NPC") then
+                considerModel(child)
+            end
+        end
+    end
+
     return bots
 end
 local function CreateBotESP(botModel)
@@ -1031,18 +1073,29 @@ local function RemoveBotESP(botModel)
     BotESPObjects[botModel] = nil
 end
 local function UpdateBotESP()
-    if not AutoFarmSettings.Enabled or not AutoFarmSettings.ShowBotESP then return end
+    if not AutoFarmSettings.Enabled then return end
     local myChar = LocalPlayer.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
     local myPos = myChar.HumanoidRootPart.Position
-    local bots = GetBots()
-    for _, bot in pairs(bots) do
+
+    if not AutoFarmSettings.ShowBotESP then
+        for bot, _ in pairs(BotESPObjects) do
+            RemoveBotESP(bot)
+        end
+        return
+    end
+
+    local bots = (GetBots and GetBots()) or {}
+    local activeBotMap = {}
+    for _, bot in ipairs(bots) do
+        activeBotMap[bot] = true
         if not BotESPObjects[bot] then
             CreateBotESP(bot)
         end
     end
+
     for bot, esp in pairs(BotESPObjects) do
-        if not bot or not bot.Parent or not esp.rootPart or not esp.rootPart.Parent then
+        if not activeBotMap[bot] or not bot or not bot.Parent or not esp.rootPart or not esp.rootPart.Parent then
             RemoveBotESP(bot)
         else
             local humanoid = bot:FindFirstChildOfClass("Humanoid")
@@ -1056,7 +1109,7 @@ local function UpdateBotESP()
                     RemoveBotESP(bot)
                 else
                     local distance = (esp.rootPart.Position - myPos).Magnitude
-                    local distLabel = esp.billboard.Frame:FindFirstChild("Distance")
+                    local distLabel = esp.billboard and esp.billboard:FindFirstChild("Frame") and esp.billboard.Frame:FindFirstChild("Distance")
                     if distLabel then
                         local meters = distance / 3.5
                         distLabel.Text = string.format("%.0fm", meters)
@@ -1066,6 +1119,7 @@ local function UpdateBotESP()
         end
     end
 end
+
 local function GetClosestBot()
     if not AutoFarmSettings.Enabled or not AutoFarmSettings.TargetBots then return nil end
     local myChar = LocalPlayer.Character
@@ -1077,32 +1131,32 @@ local function GetClosestBot()
     local closestBot = nil
     local closestDistance = math.huge
     
-    for bot, esp in pairs(BotESPObjects) do
-        if bot and bot.Parent and esp.rootPart and esp.rootPart.Parent then
+    local bots = (GetBots and GetBots()) or {}
+    for _, bot in ipairs(bots) do
+        if bot and bot.Parent then
+            local rootPart = bot:FindFirstChild("HumanoidRootPart")
             local humanoid = bot:FindFirstChildOfClass("Humanoid")
-            if humanoid and humanoid.Health > 0 then
+            if rootPart and humanoid and humanoid.Health > 0 then
                 local state = humanoid:GetState()
                 if state ~= Enum.HumanoidStateType.Dead and 
                    state ~= Enum.HumanoidStateType.Physics and
                    state ~= Enum.HumanoidStateType.None then
-                    local distance = (esp.rootPart.Position - myPos).Magnitude
-                    if distance <= 300 then
-                        -- 🔍 VISIBLE CHECK TÊTE : priorité absolue sur la tête du bot
-                        local headPart = bot:FindFirstChild("Head")
-                        if headPart and headPart.Parent then
-                            local direction = (headPart.Position - myHead.Position)
-                            local raycastParams = RaycastParams.new()
-                            raycastParams.FilterDescendantsInstances = {myChar, bot}
-                            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-                            raycastParams.IgnoreWater = true
-                            
-                            local rayResult = workspace:Raycast(myHead.Position, direction, raycastParams)
-                            local isVisible = (not rayResult) or (rayResult.Instance and rayResult.Instance:IsDescendantOf(bot))
-                            
-                            if isVisible and distance < closestDistance then
-                                closestBot = bot
-                                closestDistance = distance
-                            end
+                    local distance = (rootPart.Position - myPos).Magnitude
+                    local maxDist = AutoFarmSettings.MaxKillDistance or 15
+                    if distance <= maxDist then
+                        local headPart = bot:FindFirstChild("Head") or rootPart
+                        local direction = (headPart.Position - myHead.Position)
+                        local raycastParams = RaycastParams.new()
+                        raycastParams.FilterDescendantsInstances = {myChar, bot}
+                        raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+                        raycastParams.IgnoreWater = true
+                        
+                        local rayResult = workspace:Raycast(myHead.Position, direction, raycastParams)
+                        local isVisible = (not rayResult) or (rayResult.Instance and rayResult.Instance:IsDescendantOf(bot))
+                        
+                        if isVisible and distance < closestDistance then
+                            closestBot = bot
+                            closestDistance = distance
                         end
                     end
                 end
@@ -1196,57 +1250,43 @@ local function AutoPressE()
 end
 
 local TrackedNPCs = {}
-local NPCPullConnection = nil
+local NPCPullConnections = {}
 
 local function SetupNPCPull()
-    if NPCPullConnection then
-        NPCPullConnection:Disconnect()
-        NPCPullConnection = nil
+    for _, conn in ipairs(NPCPullConnections) do
+        pcall(function() conn:Disconnect() end)
     end
+    table.clear(NPCPullConnections)
     
     if not AutoFarmSettings.PullNPCs then 
         table.clear(TrackedNPCs)
         return 
     end
     
-    local folder = workspace:FindFirstChild("HoodLocal")
-    if not folder then 
-        warn("⚠️ HoodLocal folder introuvable")
-        return 
-    end
-    
-    -- Fonction pour vérifier si c'est un vrai NPC qui spawn (pas un joueur, pas déjà gelé)
     local function IsValidNPC(npc)
-        if not npc:IsA("Model") then return false end
-        
-        -- Vérifier que ce n'est pas un joueur
+        if not npc or not npc:IsA("Model") then return false end
         if Players:GetPlayerFromCharacter(npc) then return false end
         
-        -- Vérifier qu'il a un Humanoid vivant
         local humanoid = npc:FindFirstChildOfClass("Humanoid")
         if not humanoid or humanoid.Health <= 0 then return false end
         
-        -- Vérifier qu'il a un HumanoidRootPart
         local root = npc:FindFirstChild("HumanoidRootPart")
         if not root or not root:IsA("BasePart") then return false end
         
-        -- CRITIQUE: Ignorer les NPCs déjà anchored (déjà gelés)
         if root.Anchored == true then 
             return false 
         end
         
-        -- Vérifier que le NPC bouge vraiment (pas un model statique)
-        if humanoid.WalkSpeed == 0 then return false end
-        
-        -- Vérifier que c'est bien un NPC du jeu (commence par Hood)
-        if not npc.Name:match("^Hood%d+") then return false end
+        local parentName = npc.Parent and npc.Parent.Name or ""
+        local isNPCFolder = (parentName == "HoodLocal" or parentName == "Zombies" or parentName == "ZombieLocal")
+        local nameMatch = npc.Name:match("^Hood") or npc.Name:match("^Zombie") or npc.Name:match("^NPC")
+        if not (nameMatch or isNPCFolder) then return false end
         
         return true
     end
     
-    -- Fonction pour téléporter et freeze un NPC
     local function ProcessNPC(npc)
-        if TrackedNPCs[npc] then return end
+        if not npc or TrackedNPCs[npc] then return end
         if not IsValidNPC(npc) then return end
         
         TrackedNPCs[npc] = true
@@ -1257,7 +1297,6 @@ local function SetupNPCPull()
         local root = npc:FindFirstChild("HumanoidRootPart")
         if not root then return end
         
-        -- Téléporter devant le joueur
         local pos = hrp.Position + hrp.CFrame.LookVector * 5
         root.CFrame = CFrame.new(pos + Vector3.new(
             math.random(-3, 3),
@@ -1265,11 +1304,8 @@ local function SetupNPCPull()
             math.random(-3, 3)
         ))
         
-        -- Freeze si activé
         if AutoFarmSettings.FreezeNPCs then
             root.Anchored = true
-            
-            -- Désactiver l'IA du NPC
             local humanoid = npc:FindFirstChildOfClass("Humanoid")
             if humanoid then
                 pcall(function()
@@ -1280,31 +1316,56 @@ local function SetupNPCPull()
             end
         end
         
-        print("✅ NPC " .. npc.Name .. " téléporté et freeze")
+        print("?? NPC " .. npc.Name .. " tlport et freeze")
     end
     
-    -- NE PAS traiter les NPCs existants au démarrage (ils sont souvent déjà gelés)
-    -- On surveille UNIQUEMENT les nouveaux spawns
+    local function HookFolder(folder)
+        if not folder then return end
+        
+        for _, npc in ipairs(folder:GetChildren()) do
+            if IsValidNPC(npc) then
+                task.spawn(ProcessNPC, npc)
+            end
+        end
+        
+        local addConn = folder.ChildAdded:Connect(function(npc)
+            if not AutoFarmSettings.PullNPCs then return end
+            task.wait(0.2)
+            if IsValidNPC(npc) then
+                print("?? Nouveau NPC dtect: " .. npc.Name)
+                ProcessNPC(npc)
+            end
+        end)
+        table.insert(NPCPullConnections, addConn)
+        
+        local remConn = folder.ChildRemoved:Connect(function(npc)
+            TrackedNPCs[npc] = nil
+        end)
+        table.insert(NPCPullConnections, remConn)
+    end
     
-    -- Surveiller les nouveaux spawns
-    NPCPullConnection = folder.ChildAdded:Connect(function(npc)
+    local candidateFolders = {"HoodLocal", "Zombies", "ZombieLocal", "NPCs", "Bots"}
+    for _, fName in ipairs(candidateFolders) do
+        local f = workspace:FindFirstChild(fName)
+        if f then
+            HookFolder(f)
+        end
+    end
+    
+    local wsConn = workspace.ChildAdded:Connect(function(child)
         if not AutoFarmSettings.PullNPCs then return end
-        
-        -- Attendre que le NPC soit complètement chargé et commence à bouger
-        task.wait(0.3)
-        
-        if IsValidNPC(npc) then
-            print("🆕 Nouveau NPC détecté: " .. npc.Name)
-            ProcessNPC(npc)
+        if table.find(candidateFolders, child.Name) then
+            HookFolder(child)
+        elseif child:IsA("Model") and (child.Name:match("^Zombie") or child.Name:match("^Hood")) then
+            task.wait(0.2)
+            if IsValidNPC(child) then
+                ProcessNPC(child)
+            end
         end
     end)
+    table.insert(NPCPullConnections, wsConn)
     
-    -- Nettoyer les NPCs supprimés de la liste
-    folder.ChildRemoved:Connect(function(npc)
-        TrackedNPCs[npc] = nil
-    end)
-    
-    print("✅ NPC Pull System activé - Surveillance des NOUVEAUX spawns uniquement")
+    print("?? NPC Pull System activ - Surveillance HoodLocal & Zombies")
 end
 local function ApplySpeedHack()
                 if not MiscSettings.SpeedHack then return end
@@ -1450,94 +1511,216 @@ local function ApplySpeedHack()
             end
             local SkinModel = nil
             local SkinWeld = nil
-            
+            local SkinHandleAtt = nil
+            local SkinRigidConstraint = nil
+            local SkinHiddenProps = {}
+            local SkinConnections = {}
+
             local function CleanupSkin()
-                if SkinModel then 
-                    SkinModel:Destroy() 
-                    SkinModel = nil
+                for _, c in ipairs(SkinConnections) do
+                    pcall(function() c:Disconnect() end)
                 end
-                if SkinWeld then 
-                    SkinWeld:Destroy() 
+                table.clear(SkinConnections)
+
+                if SkinRigidConstraint then
+                    pcall(function() SkinRigidConstraint:Destroy() end)
+                    SkinRigidConstraint = nil
+                end
+                if SkinWeld then
+                    pcall(function() SkinWeld:Destroy() end)
                     SkinWeld = nil
                 end
-                
+                if SkinHandleAtt then
+                    pcall(function() SkinHandleAtt:Destroy() end)
+                    SkinHandleAtt = nil
+                end
+                if SkinModel then
+                    pcall(function() SkinModel:Destroy() end)
+                    SkinModel = nil
+                end
+
                 local character = LocalPlayer.Character
                 if character then
-                    local partsToShow = {
-                        "Head",
-                        "UpperTorso",
-                        "LowerTorso",
-                        "Torso",
-                        "LeftUpperArm",
-                        "RightUpperArm",
-                        "LeftLowerArm",
-                        "RightLowerArm",
-                        "LeftHand",
-                        "RightHand"
-                    }
-                    for _, part in pairs(character:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            for _, partName in ipairs(partsToShow) do
-                                if part.Name == partName then
-                                    part.Transparency = 0
-                                    break
+                    pcall(function()
+                        character:SetAttribute("CostumeFX", nil)
+                    end)
+                    -- Restaurer toutes les propriétés cachées d'origine
+                    for inst, origVal in pairs(SkinHiddenProps) do
+                        if inst and inst.Parent then
+                            pcall(function()
+                                if inst:IsA("BasePart") or inst:IsA("Decal") or inst:IsA("Texture") then
+                                    inst.Transparency = origVal
+                                elseif inst:IsA("WrapLayer") then
+                                    inst.Enabled = origVal
                                 end
-                            end
-                        elseif part:IsA("Decal") and part.Name == "face" then
-                            part.Transparency = 0
+                            end)
                         end
                     end
                 end
+                table.clear(SkinHiddenProps)
             end
+
+            local function HideCharacterInstance(inst)
+                if not inst or not inst.Parent then return end
+                -- Ne jamais masquer les objets du costume ni les armes
+                if SkinModel and inst:IsDescendantOf(SkinModel) then return end
+                if inst:FindFirstAncestorOfClass("Tool") then return end
+
+                if inst:IsA("BasePart") then
+                    -- Ne pas cacher le HumanoidRootPart ni les mains (visibles pour tenir les armes)
+                    if inst.Name == "HumanoidRootPart" or inst.Name == "LeftHand" or inst.Name == "RightHand" then
+                        return
+                    end
+                    if SkinHiddenProps[inst] == nil then
+                        SkinHiddenProps[inst] = inst.Transparency
+                    end
+                    inst.Transparency = 1
+                    local conn = inst:GetPropertyChangedSignal("Transparency"):Connect(function()
+                        if MiscSettings.ModelChanger and inst.Transparency ~= 1 then
+                            inst.Transparency = 1
+                        end
+                    end)
+                    table.insert(SkinConnections, conn)
+
+                elseif inst:IsA("Decal") or inst:IsA("Texture") then
+                    if SkinHiddenProps[inst] == nil then
+                        SkinHiddenProps[inst] = inst.Transparency
+                    end
+                    inst.Transparency = 1
+                    local conn = inst:GetPropertyChangedSignal("Transparency"):Connect(function()
+                        if MiscSettings.ModelChanger and inst.Transparency ~= 1 then
+                            inst.Transparency = 1
+                        end
+                    end)
+                    table.insert(SkinConnections, conn)
+
+                elseif inst:IsA("WrapLayer") then
+                    -- Vêtements 3D (Layered Clothing : hoodie, pantalons, etc.)
+                    if SkinHiddenProps[inst] == nil then
+                        SkinHiddenProps[inst] = inst.Enabled
+                    end
+                    inst.Enabled = false
+                    local conn = inst:GetPropertyChangedSignal("Enabled"):Connect(function()
+                        if MiscSettings.ModelChanger and inst.Enabled ~= false then
+                            inst.Enabled = false
+                        end
+                    end)
+                    table.insert(SkinConnections, conn)
+                end
+            end
+
             local function MakeCharacterInvisible()
                 local character = LocalPlayer.Character
                 if not character then return end
-                
-                -- Retirer les cheveux et accessoires
-                for _, obj in pairs(character:GetChildren()) do
-                    if obj:IsA("Accessory") then
-                        obj:Destroy()
-                    end
+
+                for _, d in ipairs(character:GetDescendants()) do
+                    HideCharacterInstance(d)
                 end
-                
-                -- Retirer les vêtements
-                for _, obj in pairs(character:GetChildren()) do
-                    if obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
-                        obj:Destroy()
-                    end
-                end
-                
-                -- Parties à rendre invisibles (tête, torse, bras ET mains)
-                local partsToHide = {
-                    "Head",
-                    "UpperTorso",
-                    "LowerTorso",
-                    "Torso",
-                    "LeftUpperArm",
-                    "RightUpperArm",
-                    "LeftLowerArm",
-                    "RightLowerArm",
-                    "LeftHand",
-                    "RightHand"
-                }
-                
-                for _, part in pairs(character:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        local shouldHide = false
-                        for _, partName in ipairs(partsToHide) do
-                            if part.Name == partName then
-                                shouldHide = true
-                                break
+
+                local addConn = character.DescendantAdded:Connect(function(d)
+                    task.defer(HideCharacterInstance, d)
+                end)
+                table.insert(SkinConnections, addConn)
+            end
+
+            local function FindSkinSource(targetId)
+                local idStr = tostring(targetId or ""):gsub("%s+", "")
+                local RS = game:GetService("ReplicatedStorage")
+                local wardrobe = RS:FindFirstChild("WardrobeModels")
+                local costumeFX = RS:FindFirstChild("CostumeFX")
+
+                local isRobe = (idStr == "" or idStr == "101326635064310" or idStr == "135336389839889"
+                    or idStr:find("10132663") or idStr:lower():find("robe") or idStr:lower():find("reaper") or idStr:lower():find("cloak") or idStr:lower():find("hood"))
+
+                -- 1. Si c'est la robe Grim Reaper : chercher en priorité dans WardrobeModels et CostumeFX
+                if isRobe then
+                    if wardrobe then
+                        -- Nom officiel dans le jeu : "135336389839889"
+                        local src = wardrobe:FindFirstChild("135336389839889") or wardrobe:FindFirstChild("101326635064310")
+                        if src then return src end
+                        for _, ch in ipairs(wardrobe:GetChildren()) do
+                            local n = ch.Name:lower()
+                            if n:find("135336389839889") or n:find("10132663") or n:find("reaper") or n:find("robe") or n:find("cloak") then
+                                return ch
                             end
                         end
-                        if shouldHide then
-                            part.Transparency = 1
+                    end
+                    if costumeFX then
+                        local src = costumeFX:FindFirstChild("135336389839889") or costumeFX:FindFirstChild("101326635064310")
+                        if src then return src end
+                        for _, ch in ipairs(costumeFX:GetChildren()) do
+                            local n = ch.Name:lower()
+                            if n:find("135336389839889") or n:find("10132663") or n:find("reaper") or n:find("robe") or n:find("cloak") then
+                                return ch
+                            end
                         end
-                    elseif part:IsA("Decal") and part.Name == "face" then
-                        part.Transparency = 1
+                    end
+                    -- Téléchargement catalogue direct de l'Accessoire via executor par son ID catalogue 135336389839889
+                    local ok, asset = pcall(function()
+                        return game:GetObjects("rbxassetid://135336389839889")[1]
+                    end)
+                    if ok and asset then
+                        return asset
                     end
                 end
+
+                -- 2. Recherche par ID direct dans WardrobeModels
+                if wardrobe then
+                    local d = wardrobe:FindFirstChild(idStr)
+                    if d then return d end
+                    for _, ch in ipairs(wardrobe:GetChildren()) do
+                        if ch.Name == idStr or ch.Name:find(idStr, 1, true) then
+                            return ch
+                        end
+                    end
+                end
+
+                -- 3. Recherche dans CostumeFX
+                if costumeFX then
+                    local d = costumeFX:FindFirstChild(idStr)
+                    if d then return d end
+                    for _, ch in ipairs(costumeFX:GetChildren()) do
+                        if ch.Name == idStr or ch.Name:find(idStr, 1, true) then
+                            return ch
+                        end
+                    end
+                end
+
+                -- 4. Recherche dans les autres dossiers de ReplicatedStorage
+                local knownFolders = {"Skins", "Wardrobe", "Costumes", "Models", "Assets", "Items", "Characters", "Weapons", "CustomSkins"}
+                for _, fName in ipairs(knownFolders) do
+                    local folder = RS:FindFirstChild(fName)
+                    if folder then
+                        local d = folder:FindFirstChild(idStr)
+                        if d then return d end
+                        for _, ch in ipairs(folder:GetChildren()) do
+                            if ch.Name == idStr or ch.Name:find(idStr, 1, true) then
+                                return ch
+                            end
+                        end
+                    end
+                end
+
+                -- 5. Téléchargement direct via l'exécuteur si ID numérique
+                local numericId = idStr:match("%d+")
+                if numericId then
+                    local ok, asset = pcall(function()
+                        return game:GetObjects("rbxassetid://" .. numericId)[1]
+                    end)
+                    if ok and asset then
+                        return asset
+                    end
+                    local ok2, asset2 = pcall(function()
+                        return game:GetService("InsertService"):LoadLocalAsset("rbxassetid://" .. numericId)
+                    end)
+                    if ok2 and asset2 then
+                        return asset2
+                    end
+                end
+
+                return nil
             end
+
             local function ApplyModelChanger()
                 CleanupSkin()
                 if not MiscSettings.ModelChanger then return end
@@ -1545,47 +1728,245 @@ local function ApplySpeedHack()
                 local character = LocalPlayer.Character
                 if not character then return end
                 
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
                 local upperTorso = character:FindFirstChild("UpperTorso")
                 local torso = character:FindFirstChild("Torso")
                 local attachPart = upperTorso or torso
-                
                 if not attachPart then return end
                 
-                local RS = game:GetService("ReplicatedStorage")
-                local wardrobeModels = RS:FindFirstChild("WardrobeModels")
-                if not wardrobeModels then
-                    warn("⚠️ WardrobeModels introuvable dans ReplicatedStorage")
-                    return
-                end
+                local targetId = MiscSettings.SelectedSkinID
+                local source = FindSkinSource(targetId)
                 
-                local source = wardrobeModels:FindFirstChild(MiscSettings.SelectedSkinID)
                 if not source then
-                    warn("⚠️ Skin ID introuvable: " .. MiscSettings.SelectedSkinID)
+                    warn("⚠️ Skin introuvable dans WardrobeModels pour : " .. tostring(targetId))
+                    pcall(function()
+                        if NotifyHalloween then
+                            NotifyHalloween("WARDROBE", "Skin introuvable dans le jeu !")
+                        end
+                    end)
                     return
                 end
                 
-                -- Rendre le personnage invisible et retirer cheveux/vêtements
-                MakeCharacterInvisible()
+                print("✨ Skin source trouvée avec succès : " .. source:GetFullName())
+                
+                -- Activer l'attribut CostumeFX sur le joueur pour le ReaperFXClient du jeu
+                pcall(function()
+                    character:SetAttribute("CostumeFX", tostring(targetId))
+                end)
                 
                 -- Cloner le skin
-                SkinModel = source:Clone()
-                SkinModel.CanCollide = false
-                SkinModel.Massless = true
-                SkinModel.Anchored = false
-                SkinModel.Parent = character
+                local clone = source:Clone()
+                SkinModel = clone
                 
-                -- Créer un Weld solide
-                SkinWeld = Instance.new("Weld")
-                SkinWeld.Name = "SkinWeld"
-                SkinWeld.Part0 = attachPart
-                SkinWeld.Part1 = SkinModel
-                -- Position précise : descendre de 2.5 studs par rapport au UpperTorso
-                SkinWeld.C0 = CFrame.new(0, 0, 0)
-                SkinWeld.C1 = CFrame.new(0, -MiscSettings.SkinOffsetY, 0)
-                SkinWeld.Parent = attachPart
+                local isRobeTarget = (tostring(targetId):find("101326635064310") or tostring(targetId):find("135336389839889") or tostring(targetId):find("10132663") or tostring(targetId):lower():find("robe") or tostring(targetId):lower():find("cloak") or tostring(targetId):lower():find("hood") or targetId == "" or targetId == nil)
+
+                -- Détecter si le skin est un Accessory (ou convertible en Accessory)
+                local isAccessory = clone:IsA("Accessory")
+                local handle = nil
                 
+                if isAccessory then
+                    handle = clone:FindFirstChild("Handle") or clone:FindFirstChildWhichIsA("BasePart")
+                elseif clone:IsA("Model") and (clone:FindFirstChild("Handle") or isRobeTarget) then
+                    handle = clone:FindFirstChild("Handle") or clone:FindFirstChildWhichIsA("BasePart")
+                    if handle then
+                        local newAcc = Instance.new("Accessory")
+                        newAcc.Name = "Accessory (Hooded RobeCloak)"
+                        handle.Parent = newAcc
+                        SkinModel = newAcc
+                        clone = newAcc
+                        isAccessory = true
+                    end
+                elseif clone:IsA("BasePart") then
+                    local newAcc = Instance.new("Accessory")
+                    newAcc.Name = "Accessory (Hooded RobeCloak)"
+                    clone.Name = "Handle"
+                    clone.Parent = newAcc
+                    SkinModel = newAcc
+                    clone = newAcc
+                    handle = clone.Handle
+                    isAccessory = true
+                end
                 
-                print("✅ Skin appliqué : " .. MiscSettings.SelectedSkinID)
+                if isAccessory and handle and handle:IsA("BasePart") then
+                    -- 1. Propriétés physiques exactes du Handle
+                    handle.Name = "Handle"
+                    handle.CanCollide = false
+                    handle.Massless = true
+                    handle.CastShadow = true
+                    handle.RootPriority = 0
+                    handle.Anchored = false
+                    
+                    -- 2. BodyFrontAttachment exact
+                    local handleAtt = handle:FindFirstChild("BodyFrontAttachment")
+                    if not handleAtt or not handleAtt:IsA("Attachment") then
+                        handleAtt = Instance.new("Attachment")
+                        handleAtt.Name = "BodyFrontAttachment"
+                        handleAtt.Parent = handle
+                    end
+                    local offsetY = MiscSettings.SkinOffsetY or 0
+                    handleAtt.CFrame = CFrame.new(0.001, 1.15 - offsetY, -0.328, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+                    handleAtt.Axis = Vector3.new(1, 0, 0)
+                    handleAtt.SecondaryAxis = Vector3.new(0, 1, 0)
+                    SkinHandleAtt = handleAtt
+                    
+                    -- 3. WrapLayer exact
+                    local wrapLayer = handle:FindFirstChild("Hooded RobeCloakWrapLayer") or handle:FindFirstChildOfClass("WrapLayer")
+                    if wrapLayer then
+                        wrapLayer.Order = 801
+                        wrapLayer.Puffiness = 1
+                        pcall(function()
+                            wrapLayer.TargetShaping = Enum.LayerTargetShaping.None
+                        end)
+                        wrapLayer.Enabled = true
+                    end
+                    
+                    -- 4. SurfaceAppearance
+                    local sa = handle:FindFirstChildOfClass("SurfaceAppearance")
+                    if sa then
+                        pcall(function()
+                            sa.AlphaMode = Enum.AlphaMode.Overlay
+                            sa.Color = Color3.fromRGB(255, 255, 255)
+                            sa.EmissiveStrength = 1
+                            sa.EmissiveTint = Color3.fromRGB(255, 255, 255)
+                        end)
+                    end
+                    
+                    -- 5. Attachment sur l'UpperTorso du joueur
+                    local upperTorsoAtt = attachPart:FindFirstChild("BodyFrontAttachment")
+                    if not upperTorsoAtt or not upperTorsoAtt:IsA("Attachment") then
+                        upperTorsoAtt = Instance.new("Attachment")
+                        upperTorsoAtt.Name = "BodyFrontAttachment"
+                        upperTorsoAtt.CFrame = CFrame.new(0, 0, 0)
+                        upperTorsoAtt.Parent = attachPart
+                    end
+                    
+                    -- 6. AccessoryRigidConstraint exact
+                    local rigid = clone:FindFirstChild("AccessoryRigidConstraint") or clone:FindFirstChildOfClass("RigidConstraint")
+                    if not rigid then
+                        rigid = Instance.new("RigidConstraint")
+                        rigid.Name = "AccessoryRigidConstraint"
+                        rigid.Parent = clone
+                    end
+                    rigid.Attachment0 = handleAtt
+                    rigid.Attachment1 = upperTorsoAtt
+                    SkinRigidConstraint = rigid
+                    
+                    -- 7. Weld direct pour verrouillage parfait et support du slider SkinOffsetY
+                    SkinWeld = Instance.new("Weld")
+                    SkinWeld.Name = "SkinWeld"
+                    SkinWeld.Part0 = attachPart
+                    SkinWeld.Part1 = handle
+                    SkinWeld.C0 = upperTorsoAtt.CFrame
+                    SkinWeld.C1 = handleAtt.CFrame
+                    SkinWeld.Parent = attachPart
+                    
+                    -- 8. Ajout à l'Humanoid du joueur
+                    if humanoid then
+                        pcall(function()
+                            humanoid:AddAccessory(clone)
+                        end)
+                    end
+                    if clone.Parent ~= character then
+                        clone.Parent = character
+                    end
+                    
+                    -- Masquer le corps et vêtements du joueur (mains et armes préservées)
+                    MakeCharacterInvisible()
+                    
+                elseif clone:IsA("Model") then
+                    for _, d in ipairs(clone:GetDescendants()) do
+                        if d:IsA("Humanoid") or d:IsA("AnimationController") or d:IsA("Animator") or d:IsA("BaseScript") then
+                            pcall(function() d:Destroy() end)
+                        end
+                    end
+                    
+                    local mainPart = nil
+                    for _, p in ipairs(clone:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.CanCollide = false
+                            p.Massless = true
+                            p.Anchored = false
+                            if not mainPart and (p.Name == "UpperTorso" or p.Name == "Torso" or p.Name == "HumanoidRootPart") then
+                                mainPart = p
+                            end
+                        end
+                    end
+                    if not mainPart then
+                        mainPart = clone.PrimaryPart or clone:FindFirstChildWhichIsA("BasePart", true)
+                    end
+                    
+                    if mainPart then
+                        clone.PrimaryPart = mainPart
+                        for _, p in ipairs(clone:GetDescendants()) do
+                            if p:IsA("BasePart") and p ~= mainPart then
+                                local hasJoint = false
+                                for _, j in ipairs(p:GetJoints()) do
+                                    if j.Part0 == p or j.Part1 == p then
+                                        hasJoint = true
+                                        break
+                                    end
+                                end
+                                if not hasJoint then
+                                    local wc = Instance.new("WeldConstraint")
+                                    wc.Part0 = mainPart
+                                    wc.Part1 = p
+                                    wc.Parent = mainPart
+                                end
+                            end
+                        end
+                        
+                        SkinWeld = Instance.new("Weld")
+                        SkinWeld.Name = "SkinWeld"
+                        SkinWeld.Part0 = attachPart
+                        SkinWeld.Part1 = mainPart
+                        SkinWeld.C0 = CFrame.new(0, 0, 0)
+                        SkinWeld.C1 = CFrame.new(0, -MiscSettings.SkinOffsetY, 0)
+                        SkinWeld.Parent = attachPart
+                    end
+                    
+                    clone.Parent = character
+                    MakeCharacterInvisible()
+                elseif clone:IsA("BasePart") then
+                    clone.CanCollide = false
+                    clone.Massless = true
+                    clone.Anchored = false
+                    
+                    SkinWeld = Instance.new("Weld")
+                    SkinWeld.Name = "SkinWeld"
+                    SkinWeld.Part0 = attachPart
+                    SkinWeld.Part1 = clone
+                    SkinWeld.C0 = CFrame.new(0, 0, 0)
+                    SkinWeld.C1 = CFrame.new(0, -MiscSettings.SkinOffsetY, 0)
+                    SkinWeld.Parent = attachPart
+                    
+                    clone.Parent = character
+                    MakeCharacterInvisible()
+                elseif clone:IsA("Accessory") then
+                    local hum = character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        pcall(function() hum:AddAccessory(clone) end)
+                    end
+                    if clone.Parent ~= character then
+                        clone.Parent = character
+                    end
+                    MakeCharacterInvisible()
+                elseif clone:IsA("Folder") then
+                    clone.Parent = character
+                    for _, p in ipairs(clone:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.CanCollide = false
+                            p.Massless = true
+                            p.Anchored = false
+                            local wc = Instance.new("WeldConstraint")
+                            wc.Part0 = attachPart
+                            wc.Part1 = p
+                            wc.Parent = attachPart
+                        end
+                    end
+                    MakeCharacterInvisible()
+                end
+                
+                print("🎃 Skin appliqué avec succès : " .. tostring(targetId))
             end
 
             -- ============================================================
@@ -2683,7 +3064,12 @@ local function ApplySpeedHack()
             CloseBtn.MouseButton1Click:Connect(function()
                 ScreenGui.Enabled = false
             end)
-            local TabBar = Instance.new("Frame", Window)
+            local TabBar = Instance.new("ScrollingFrame", Window)
+            TabBar.ScrollBarThickness = 0
+            TabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+            TabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+            TabBar.ScrollingDirection = Enum.ScrollingDirection.X
+            TabBar.ClipsDescendants = true
             TabBar.Size = UDim2.new(1, 0, 0, 28)
             TabBar.Position = UDim2.new(0, 0, 0, 32)
             TabBar.BackgroundColor3 = C.sidebar
@@ -2707,7 +3093,7 @@ local function ApplySpeedHack()
             local activeTab = nil
             local function AddTab(name)
                 local btn = Instance.new("TextButton", TabBar)
-                btn.Size = UDim2.new(0, 90, 1, -4)
+                btn.Size = UDim2.new(0, 78, 1, -4)
                 btn.BackgroundColor3 = C.sidebar
                 btn.BorderSizePixel = 0
                 btn.Text = name
@@ -2939,13 +3325,34 @@ local function ApplySpeedHack()
                     end)
                 end
             end
+            local function AddButton(parent, text, callback, customColor)
+                local btn = Instance.new("TextButton", parent)
+                btn.Size = UDim2.new(1, 0, 0, 24)
+                btn.BackgroundColor3 = customColor or C.element
+                btn.Text = text
+                btn.TextColor3 = C.textPri
+                btn.Font = Enum.Font.GothamSemibold
+                btn.TextSize = 11
+                btn.BorderSizePixel = 0
+                btn.AutoButtonColor = true
+                Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+                local stroke = Instance.new("UIStroke", btn)
+                stroke.Color = C.border
+                stroke.Thickness = 1
+                btn.MouseButton1Click:Connect(function()
+                    pcall(callback, btn)
+                end)
+                return btn
+            end
             local TabESP = AddTab("ESP")
             local TabAim = AddTab("Aimbot")
             local TabMisc = AddTab("Misc")
+            local TabKillEffects = AddTab("💀 Kill FX")
             local TabModelChanger = AddTab("Model Changer")
             local TabAutoFarm = AddTab("🤖 Auto Farm")
             local TabTeleport = AddTab("🚀 Teleport")
-            local gbESP = AddGroupbox(TabESP.left, "ESP Settings")
+            do
+                local gbESP = AddGroupbox(TabESP.left, "ESP Settings")
             AddToggle(gbESP, "ESP Enabled", ESPSettings.Enabled, function(v) ESPSettings.Enabled = v end)
             AddToggle(gbESP, "Show Boxes", ESPSettings.ShowBoxes, function(v) ESPSettings.ShowBoxes = v end)
             AddToggle(gbESP, "Show Names", ESPSettings.ShowNames, function(v) ESPSettings.ShowNames = v end)
@@ -2984,6 +3391,564 @@ local function ApplySpeedHack()
             end)
             local gbView = AddGroupbox(TabMisc.left, "View")
             AddSlider(gbView, "FOV", MiscSettings.FOV, 60, 120, function(v) MiscSettings.FOV = v; Camera.FieldOfView = v end)
+            local gbHalloween = AddGroupbox(TabMisc.left, "🎃 Halloween Event")
+            do
+                local RS = game:GetService("ReplicatedStorage")
+                local CS = game:GetService("CollectionService")
+
+                local function getHalloweenQuest()
+                    return RS:FindFirstChild("HalloweenQuest")
+                end
+
+                local HalloweenLastState = nil
+                local GhostESPFolder = Instance.new("Folder")
+                GhostESPFolder.Name = "HalloweenGhostESPFolder"
+                pcall(function()
+                    GhostESPFolder.Parent = game:GetService("CoreGui")
+                end)
+                if not GhostESPFolder.Parent then
+                    GhostESPFolder.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or workspace
+                end
+
+                local function NotifyHalloween(title, msg)
+                    pcall(function()
+                        local NotifyModule = RS:FindFirstChild("Notify")
+                        if NotifyModule then
+                            local Notify = require(NotifyModule)
+                            if type(Notify) == "table" and type(Notify.Announce) == "function" then
+                                Notify.Announce(title, msg, 4)
+                                return
+                            end
+                        end
+                        game:GetService("StarterGui"):SetCore("SendNotification", {
+                            Title = title,
+                            Text = msg,
+                            Duration = 4
+                        })
+                    end)
+                end
+
+                -- Écoute d'état originale pour récupérer les tiers & goals
+                pcall(function()
+                    local hq = getHalloweenQuest()
+                    if hq then
+                        hq.OnClientEvent:Connect(function(action, data)
+                            if action == "state" and type(data) == "table" then
+                                HalloweenLastState = data
+                                if MiscSettings.HalloweenSpoofQuests then
+                                    data.g = { ["1"]=true, ["2"]=true, ["3"]=true, ["4"]=true, ["5"]=true, ["6"]=true, ["7"]=true, ["8"]=true, ["9"]=true, ["10"]=true }
+                                    data.z = 999999
+                                    data.zn = 999999
+                                    data.k = 999999
+                                end
+                            end
+                        end)
+                        hq:FireServer("get")
+                    end
+                end)
+
+                -- 1. Forcer le Skip & Claim de tous les Tiers
+                local function ForceSkipAndClaimAll()
+                    local hq = getHalloweenQuest()
+                    if not hq then
+                        NotifyHalloween("HALLOWEEN", "Remote HalloweenQuest introuvable !")
+                        return
+                    end
+                    -- Claim direct des tiers 1, 2, 3
+                    for tier = 1, 3 do
+                        pcall(function() hq:FireServer("claim", tier) end)
+                    end
+                    -- Tentatives de skip / complete pour bypass les quêtes
+                    for tier = 1, 3 do
+                        pcall(function()
+                            hq:FireServer("skip", tier)
+                            hq:FireServer("skip_tier", tier)
+                            hq:FireServer("complete", tier)
+                            hq:FireServer("complete_tier", tier)
+                        end)
+                    end
+                    for _, q in ipairs({"ghosts", "zombies", "kills", "Ghost", "Zombie", "Kill", "all"}) do
+                        pcall(function()
+                            hq:FireServer("skip", q)
+                            hq:FireServer("complete", q)
+                        end)
+                    end
+                    pcall(function()
+                        hq:FireServer("claim_all")
+                        hq:FireServer("get")
+                    end)
+                    NotifyHalloween("HALLOWEEN", "Skip & Claim envoyés au serveur !")
+                    print("🎃 [Halloween] Requêtes de skip et claim envoyées au serveur !")
+                end
+
+                -- 2. Collecte instantanée de tous les fantômes (firetouchinterest + remotes)
+                local function CollectAllGhostsInstant()
+                    local hq = getHalloweenQuest()
+                    local char = LocalPlayer.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    local ghosts = CS:GetTagged("HalloweenGhost")
+                    local count = 0
+
+                    for _, ghost in pairs(ghosts) do
+                        local ghostId = ghost:GetAttribute("GhostId")
+                        local targetPart = ghost:FindFirstChild("Body") or ghost:FindFirstChildWhichIsA("BasePart") or (ghost:IsA("BasePart") and ghost)
+
+                        if targetPart and hrp and firetouchinterest then
+                            pcall(function()
+                                firetouchinterest(hrp, targetPart, 0)
+                                task.wait(0.02)
+                                firetouchinterest(hrp, targetPart, 1)
+                            end)
+                        end
+
+                        for _, desc in pairs(ghost:GetDescendants()) do
+                            if desc:IsA("ProximityPrompt") and fireproximityprompt then
+                                pcall(fireproximityprompt, desc)
+                            end
+                        end
+
+                        if hq and ghostId then
+                            pcall(function()
+                                hq:FireServer("ghost", tonumber(ghostId) or ghostId)
+                                hq:FireServer("collect", tonumber(ghostId) or ghostId)
+                                hq:FireServer("collect_ghost", tonumber(ghostId) or ghostId)
+                            end)
+                        end
+                        count = count + 1
+                    end
+
+                    if hq then
+                        pcall(function() hq:FireServer("get") end)
+                    end
+                    NotifyHalloween("HALLOWEEN", tostring(count) .. " fantômes ciblés !")
+                    print("👻 [Halloween] " .. tostring(count) .. " fantômes ciblés pour collecte instantanée !")
+                end
+
+                -- 3. TP sécurisé vers chaque fantôme pour garantir la validation serveur
+                local isTPingGhosts = false
+                local function TPCollectAllGhosts()
+                    if isTPingGhosts then return end
+                    local char = LocalPlayer.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if not hrp then return end
+
+                    isTPingGhosts = true
+                    local origCF = hrp.CFrame
+                    local ghosts = CS:GetTagged("HalloweenGhost")
+                    local hq = getHalloweenQuest()
+
+                    task.spawn(function()
+                        NotifyHalloween("HALLOWEEN", "Téléportation vers les fantômes...")
+                        for _, ghost in pairs(ghosts) do
+                            if not isTPingGhosts then break end
+                            local targetPart = ghost:FindFirstChild("Body") or ghost:FindFirstChildWhichIsA("BasePart") or (ghost:IsA("BasePart") and ghost)
+                            local ghostId = ghost:GetAttribute("GhostId")
+
+                            if targetPart and hrp and hrp.Parent then
+                                hrp.CFrame = targetPart.CFrame + Vector3.new(0, 1.5, 0)
+
+                                if firetouchinterest then
+                                    pcall(function()
+                                        firetouchinterest(hrp, targetPart, 0)
+                                        task.wait(0.05)
+                                        firetouchinterest(hrp, targetPart, 1)
+                                    end)
+                                end
+
+                                for _, desc in pairs(ghost:GetDescendants()) do
+                                    if desc:IsA("ProximityPrompt") and fireproximityprompt then
+                                        pcall(fireproximityprompt, desc)
+                                    end
+                                end
+
+                                if hq and ghostId then
+                                    pcall(function()
+                                        hq:FireServer("ghost", tonumber(ghostId) or ghostId)
+                                        hq:FireServer("collect", tonumber(ghostId) or ghostId)
+                                    end)
+                                end
+
+                                task.wait(0.18)
+                            end
+                        end
+
+                        if hrp and hrp.Parent then
+                            hrp.CFrame = origCF
+                        end
+                        if hq then
+                            pcall(function() hq:FireServer("get") end)
+                        end
+                        isTPingGhosts = false
+                        NotifyHalloween("HALLOWEEN", "Tous les fantômes ont été visités !")
+                        print("👻 [Halloween] TP vers tous les fantômes terminé !")
+                    end)
+                end
+
+                -- 4. Spoof des quêtes dans l'UI (Débloque le bouton CLAIM vert dans le menu)
+                local function SpoofQuestsToUI()
+                    local hq = getHalloweenQuest()
+                    if not hq then return end
+
+                    local spoofed = {
+                        cfg = (HalloweenLastState and HalloweenLastState.cfg) or {
+                            tiers = {
+                                [1] = { name = "Grim Reaper", goals = { ghosts = 10, zombies = 150, kills = 250 } },
+                                [2] = { name = "Shadow Grim Reaper", goals = { ghosts = 10, zombies = 300, kills = 500 } },
+                                [3] = { name = "Inverted Grim Reaper", goals = { ghosts = 10, zombies = 500, kills = 1000 } }
+                            },
+                            ends = workspace:GetServerTimeNow() + 600000,
+                            perDay = 9999
+                        },
+                        g = { ["1"]=true, ["2"]=true, ["3"]=true, ["4"]=true, ["5"]=true, ["6"]=true, ["7"]=true, ["8"]=true, ["9"]=true, ["10"]=true },
+                        z = 999999,
+                        zn = 999999,
+                        k = 999999,
+                        c = (HalloweenLastState and HalloweenLastState.c) or {}
+                    }
+
+                    if getconnections then
+                        pcall(function()
+                            for _, conn in pairs(getconnections(hq.OnClientEvent)) do
+                                conn:Fire("state", spoofed)
+                            end
+                        end)
+                    end
+                    NotifyHalloween("HALLOWEEN", "Quêtes 100% ! Boutons CLAIM actifs !")
+                    print("⚡ [Halloween] Quêtes spoofées à 100% ! Les boutons CLAIM sont maintenant actifs !")
+                end
+
+                -- 5. Ghost ESP
+                local function UpdateGhostESP(enable)
+                    GhostESPFolder:ClearAllChildren()
+                    if not enable then return end
+
+                    for _, ghost in pairs(CS:GetTagged("HalloweenGhost")) do
+                        local part = ghost:FindFirstChild("Body") or ghost:FindFirstChildWhichIsA("BasePart") or (ghost:IsA("BasePart") and ghost)
+                        local id = ghost:GetAttribute("GhostId") or "?"
+                        if part then
+                            local bbg = Instance.new("BillboardGui", GhostESPFolder)
+                            bbg.Adornee = part
+                            bbg.Size = UDim2.new(0, 100, 0, 30)
+                            bbg.AlwaysOnTop = true
+                            local lbl = Instance.new("TextLabel", bbg)
+                            lbl.Size = UDim2.new(1, 0, 1, 0)
+                            lbl.BackgroundTransparency = 1
+                            lbl.Text = "👻 Fantôme #" .. tostring(id)
+                            lbl.TextColor3 = Color3.fromRGB(255, 170, 0)
+                            lbl.TextStrokeTransparency = 0
+                            lbl.Font = Enum.Font.GothamBold
+                            lbl.TextSize = 12
+
+                            local hl = Instance.new("Highlight", GhostESPFolder)
+                            hl.Adornee = ghost
+                            hl.FillColor = Color3.fromRGB(255, 140, 0)
+                            hl.FillTransparency = 0.5
+                            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                        end
+                    end
+                end
+
+                -- 6. Loop Auto Claim
+                local HalloweenLoopThread = nil
+                local function StartHalloweenClaimLoop(enable)
+                    if not enable then
+                        if HalloweenLoopThread then
+                            task.cancel(HalloweenLoopThread)
+                            HalloweenLoopThread = nil
+                        end
+                        return
+                    end
+                    if HalloweenLoopThread then return end
+                    HalloweenLoopThread = task.spawn(function()
+                        while MiscSettings.HalloweenAutoClaim do
+                            local hq = getHalloweenQuest()
+                            if hq then
+                                for tier = 1, 3 do
+                                    pcall(function() hq:FireServer("claim", tier) end)
+                                end
+                                pcall(function() hq:FireServer("get") end)
+                            end
+                            task.wait(2.5)
+                        end
+                        HalloweenLoopThread = nil
+                    end)
+                end
+
+                -- Boutons & Contrôles dans gbHalloween
+                AddButton(gbHalloween, "🎃 Force Skip & Claim All", function()
+                    ForceSkipAndClaimAll()
+                end, Color3.fromRGB(210, 105, 30))
+
+                AddButton(gbHalloween, "👻 Collect Ghosts (Instant)", function()
+                    CollectAllGhostsInstant()
+                end)
+
+                AddButton(gbHalloween, "👻 TP & Touch All Ghosts", function()
+                    TPCollectAllGhosts()
+                end)
+
+                AddButton(gbHalloween, "⚡ Spoof Quests (Unlock CLAIM UI)", function()
+                    MiscSettings.HalloweenSpoofQuests = true
+                    SpoofQuestsToUI()
+                end)
+
+                AddToggle(gbHalloween, "🔁 Auto Claim Tiers (Loop)", MiscSettings.HalloweenAutoClaim, function(v)
+                    MiscSettings.HalloweenAutoClaim = v
+                    StartHalloweenClaimLoop(v)
+                    if v then
+                        NotifyHalloween("HALLOWEEN", "Auto Claim activé !")
+                    else
+                        NotifyHalloween("HALLOWEEN", "Auto Claim désactivé !")
+                    end
+                end)
+
+                AddToggle(gbHalloween, "👻 Ghost ESP (Map Tracker)", MiscSettings.HalloweenGhostESP, function(v)
+                    MiscSettings.HalloweenGhostESP = v
+                    UpdateGhostESP(v)
+                end)
+
+                AddButton(gbHalloween, "👘 Equip Grim Reaper Robe", function()
+                    MiscSettings.SelectedSkinID = "101326635064310"
+                    MiscSettings.ModelChanger = true
+                    if ApplyModelChanger then
+                        ApplyModelChanger()
+                        NotifyHalloween("WARDROBE", "Grim Reaper Robe équipée !")
+                        print("👘 [Halloween] Skin Grim Reaper Robe équipé !")
+                    end
+                end)
+
+                -- 7. 🎃 BULLET TRACER HALLOWEEN (Exclusif au joueur local)
+                -- Chemin exact de la photo: ReplicatedStorage.FX.Tracers.MuzzleFlash1.Halloween
+                local function GetHalloweenTracerFolder()
+                    local fx = RS:FindFirstChild("FX") or RS:FindFirstChild("Fx")
+                    if fx then
+                        local tracers = fx:FindFirstChild("Tracers") or fx:FindFirstChild("tracers")
+                        if tracers then
+                            local mf1 = tracers:FindFirstChild("MuzzleFlash1") or tracers:FindFirstChild("MuzzleFlash")
+                            if mf1 then
+                                local hw = mf1:FindFirstChild("Halloween")
+                                if hw then return hw end
+                            end
+                            local hwDirect = tracers:FindFirstChild("Halloween", true)
+                            if hwDirect then return hwDirect end
+                        end
+                    end
+                    return RS:FindFirstChild("Halloween", true)
+                end
+
+                local function GetLocalMuzzlePosition()
+                    local char = LocalPlayer.Character
+                    if not char then
+                        return Camera.CFrame.Position
+                    end
+                    local tool = char:FindFirstChildOfClass("Tool")
+                    if tool then
+                        local muzzle = tool:FindFirstChild("MuzzleFlash1", true)
+                            or tool:FindFirstChild("Muzzle", true)
+                            or tool:FindFirstChild("FirePoint", true)
+                            or tool:FindFirstChild("Barrel", true)
+                            or tool:FindFirstChild("Flash", true)
+                        if muzzle then
+                            if muzzle:IsA("Attachment") then
+                                return muzzle.WorldPosition
+                            elseif muzzle:IsA("BasePart") then
+                                return muzzle.Position
+                            end
+                        end
+                        local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+                        if handle then
+                            return (handle.CFrame * CFrame.new(0, 0, -1.8)).Position
+                        end
+                    end
+                    return (Camera.CFrame * CFrame.new(0.4, -0.3, -1.2)).Position
+                end
+
+                local function GetLocalTracerTarget(startPos)
+                    local mouse = LocalPlayer:GetMouse()
+                    local rayOrigin = Camera.CFrame.Position
+                    local rayDir = (mouse.Hit and (mouse.Hit.Position - rayOrigin).Unit or Camera.CFrame.LookVector) * 1000
+                    local params = RaycastParams.new()
+                    params.FilterDescendantsInstances = { LocalPlayer.Character }
+                    params.FilterType = Enum.RaycastFilterType.Exclude
+                    local res = workspace:Raycast(rayOrigin, rayDir, params)
+                    if res then
+                        return res.Position
+                    elseif mouse.Hit then
+                        return mouse.Hit.Position
+                    end
+                    return rayOrigin + rayDir
+                end
+
+                local lastTracerTick = 0
+                local function SpawnHalloweenTracer()
+                    if not MiscSettings.HalloweenBulletTracer then return end
+                    local char = LocalPlayer.Character
+                    if not char then return end
+
+                    local now = tick()
+                    if now - lastTracerTick < 0.05 then return end
+                    lastTracerTick = now
+
+                    local hwFolder = GetHalloweenTracerFolder()
+                    if not hwFolder then return end
+
+                    local startPos = GetLocalMuzzlePosition()
+                    local targetPos = GetLocalTracerTarget(startPos)
+
+                    -- A) Muzzle Flash & Sparks Halloween
+                    pcall(function()
+                        local muzzleAtt = Instance.new("Attachment")
+                        muzzleAtt.WorldPosition = startPos
+                        muzzleAtt.Parent = workspace.Terrain
+
+                        local mEmitter = hwFolder:FindFirstChild("Muzzle")
+                        if mEmitter and mEmitter:IsA("ParticleEmitter") then
+                            local c = mEmitter:Clone()
+                            c.Parent = muzzleAtt
+                            c.Enabled = false
+                            c:Emit(c:GetAttribute("EmitCount") or 14)
+                        end
+
+                        local sEmitter = hwFolder:FindFirstChild("Sparks")
+                        if sEmitter and sEmitter:IsA("ParticleEmitter") then
+                            local c = sEmitter:Clone()
+                            c.Parent = muzzleAtt
+                            c.Enabled = false
+                            c:Emit(c:GetAttribute("EmitCount") or 10)
+                        end
+
+                        local mfPart = hwFolder:FindFirstChild("MuzzleFlash")
+                        if mfPart then
+                            local exp = mfPart:FindFirstChildWhichIsA("ParticleEmitter", true)
+                            if exp then
+                                local c = exp:Clone()
+                                c.Parent = muzzleAtt
+                                c.Enabled = false
+                                c:Emit(c:GetAttribute("EmitCount") or 8)
+                            end
+                        end
+
+                        task.delay(0.5, function()
+                            pcall(function() muzzleAtt:Destroy() end)
+                        end)
+                    end)
+
+                    -- B) Beams Tracer Halloween (Commencer -> End)
+                    pcall(function()
+                        local templateTracer = hwFolder:FindFirstChild("Tracer")
+                        if not templateTracer then return end
+
+                        local tracerClone = templateTracer:Clone()
+                        local attStart = tracerClone:FindFirstChild("Commencer", true)
+                        local attEnd = tracerClone:FindFirstChild("End", true)
+
+                        if not attStart or not attEnd then
+                            local atts = {}
+                            for _, obj in ipairs(tracerClone:GetDescendants()) do
+                                if obj:IsA("Attachment") then
+                                    table.insert(atts, obj)
+                                end
+                            end
+                            if #atts >= 2 then
+                                attStart = attStart or atts[1]
+                                attEnd = attEnd or atts[2]
+                            end
+                        end
+
+                        if attStart and attEnd then
+                            attStart.Parent = workspace.Terrain
+                            attEnd.Parent = workspace.Terrain
+                            attStart.WorldPosition = startPos
+                            attEnd.WorldPosition = targetPos
+
+                            local beams = {}
+                            for _, obj in ipairs(tracerClone:GetDescendants()) do
+                                if obj:IsA("Beam") then
+                                    obj.Attachment0 = attStart
+                                    obj.Attachment1 = attEnd
+                                    obj.Enabled = true
+                                    table.insert(beams, obj)
+                                end
+                            end
+
+                            tracerClone.Parent = workspace.Terrain
+
+                            task.spawn(function()
+                                local lifetime = 0.22
+                                local startTime = tick()
+                                while tick() - startTime < lifetime do
+                                    local elapsed = tick() - startTime
+                                    local alpha = math.clamp(elapsed / lifetime, 0, 1)
+                                    for _, beam in ipairs(beams) do
+                                        beam.Transparency = NumberSequence.new(math.clamp(alpha * 1.3, 0, 1))
+                                    end
+                                    task.wait()
+                                end
+                                pcall(function()
+                                    tracerClone:Destroy()
+                                    attStart:Destroy()
+                                    attEnd:Destroy()
+                                end)
+                            end)
+                        else
+                            tracerClone:Destroy()
+                        end
+                    end)
+                end
+
+                -- Déclencheur exclusif au joueur local (Arme en main)
+                local function HookLocalTool(tool)
+                    if not tool or not tool:IsA("Tool") then return end
+                    tool.Activated:Connect(function()
+                        if MiscSettings.HalloweenBulletTracer then
+                            SpawnHalloweenTracer()
+                        end
+                    end)
+                end
+
+                local function HookLocalCharacter(character)
+                    if not character then return end
+                    for _, child in ipairs(character:GetChildren()) do
+                        HookLocalTool(child)
+                    end
+                    character.ChildAdded:Connect(function(child)
+                        HookLocalTool(child)
+                    end)
+                end
+
+                if LocalPlayer.Character then
+                    HookLocalCharacter(LocalPlayer.Character)
+                end
+                LocalPlayer.CharacterAdded:Connect(HookLocalCharacter)
+
+                -- Support rafale automatique (clic maintenu en tir continu)
+                RunService.Heartbeat:Connect(function()
+                    if not MiscSettings.HalloweenBulletTracer then return end
+                    if not IsShooting then return end
+                    local char = LocalPlayer.Character
+                    if not char or not char:FindFirstChildOfClass("Tool") then return end
+                    local now = tick()
+                    if now - lastTracerTick >= 0.09 then
+                        SpawnHalloweenTracer()
+                    end
+                end)
+
+                AddToggle(gbHalloween, "🔥 Bullet Tracer (Halloween)", MiscSettings.HalloweenBulletTracer, function(v)
+                    MiscSettings.HalloweenBulletTracer = v
+                    if v then
+                        pcall(function()
+                            LocalPlayer:SetAttribute("Tracer", "Halloween")
+                            if LocalPlayer.Character then
+                                LocalPlayer.Character:SetAttribute("Tracer", "Halloween")
+                            end
+                        end)
+                        NotifyHalloween("TRACERS", "Halloween Bullet Tracer activé (Local uniquement) !")
+                        print("🔥 [Halloween] Bullet Tracer activé exclusivement pour le joueur local !")
+                    else
+                        NotifyHalloween("TRACERS", "Bullet Tracer désactivé")
+                    end
+                end)
+            end
             local gbPerf = AddGroupbox(TabMisc.right, "⚡ Performance")
             AddToggle(gbPerf, "🚀 Performance Mode", MiscSettings.PerformanceMode, function(v) 
                 MiscSettings.PerformanceMode = v
@@ -3020,6 +3985,9 @@ local function ApplySpeedHack()
                     RestoreSkybox() 
                 end
             end)
+            AddToggle(gbVisual, "🔥 Bullet Tracer (Halloween)", MiscSettings.HalloweenBulletTracer, function(v)
+                MiscSettings.HalloweenBulletTracer = v
+            end)
             local gbSound = AddGroupbox(TabMisc.right, "🔊 Sound")
             AddToggle(gbSound, "🎯 Hitsound", MiscSettings.Hitsound, function(v) 
                 MiscSettings.Hitsound = v
@@ -3028,6 +3996,7 @@ local function ApplySpeedHack()
                 MiscSettings.HitsoundVolume = v / 10
                 HitsoundSound.Volume = MiscSettings.HitsoundVolume
             end)
+            end
             local gbOther = AddGroupbox(TabMisc.right, "🎭 Other")
             AddToggle(gbOther, "🔫 Weapon Booster", MiscSettings.WeaponBooster, function(v) 
                 MiscSettings.WeaponBooster = v
@@ -3075,174 +4044,9 @@ local function ApplySpeedHack()
                 end
             end)
             
-            -- Variables pour Kill Effect
-            local OriginalKillEffect = nil
-            local KillEffectConnection = nil
-            
-            AddToggle(gbOther, "🎃 Halloween Kill Effect", MiscSettings.KillEffect, function(v) 
-                MiscSettings.KillEffect = v
-                
-                -- Déconnecter l'ancienne connexion si elle existe
-                if KillEffectConnection then
-                    KillEffectConnection:Disconnect()
-                    KillEffectConnection = nil
-                end
-                
-                if v then
-                    -- Activer kill effect Halloween
-                    local success, err = pcall(function()
-                        local ReplicatedStorage = game:GetService("ReplicatedStorage")
-                        
-                        local killFXFolder = ReplicatedStorage:FindFirstChild("KillFX")
-                        if not killFXFolder then
-                            warn("❌ KillFX folder introuvable")
-                            return
-                        end
-                        
-                        local halloweenFolder = killFXFolder:FindFirstChild("Halloween")
-                        if not halloweenFolder then
-                            warn("❌ Halloween folder introuvable dans KillFX")
-                            return
-                        end
-                        
-                        local glowSpecs = halloweenFolder:FindFirstChild("GlowSpecs")
-                        local attachmentTemplate = halloweenFolder:FindFirstChild("Attachment")
-                        local fog33 = halloweenFolder:FindFirstChild("Images/fog33")
-                        
-                        if not glowSpecs and not fog33 then
-                            warn("❌ Aucun effet trouvé")
-                            return
-                        end
-                        
-                        if not attachmentTemplate then
-                            warn("⚠️ Attachment template introuvable, création manuelle")
-                        end
-                        
-                        print("✅ Kill Effect Halloween activé - Monitoring des morts...")
-                        
-                        -- Fonction pour appliquer l'effet sur un joueur mort
-                        local function ApplyHalloweenEffect(player)
-                            if player == LocalPlayer then return end
-                            
-                            local character = player.Character
-                            if not character then return end
-                            
-                            local humanoid = character:FindFirstChildOfClass("Humanoid")
-                            if not humanoid then return end
-                            
-                            -- Détecter quand le joueur meurt
-                            humanoid.Died:Connect(function()
-                                task.wait(0.1)
-                                
-                                pcall(function()
-                                    -- Jouer le son Halloween
-                                    local halloweenSound = Instance.new("Sound")
-                                    halloweenSound.SoundId = "rbxassetid://138922654038066"
-                                    halloweenSound.Volume = 0.5
-                                    halloweenSound.Parent = game:GetService("SoundService")
-                                    halloweenSound:Play()
-                                    
-                                    -- Supprimer le son après qu'il ait fini
-                                    halloweenSound.Ended:Connect(function()
-                                        halloweenSound:Destroy()
-                                    end)
-                                    
-                                    -- Trouver le Torso ou UpperTorso du joueur mort
-                                    local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
-                                    if not torso then 
-                                        warn("❌ Torso introuvable sur " .. player.Name)
-                                        return 
-                                    end
-                                    
-                                    -- Cloner l'Attachment du template ou en créer un nouveau
-                                    local attachment
-                                    if attachmentTemplate then
-                                        attachment = attachmentTemplate:Clone()
-                                        attachment.Name = "HalloweenKillFX"
-                                    else
-                                        attachment = Instance.new("Attachment")
-                                        attachment.Name = "HalloweenKillFX"
-                                    end
-                                    attachment.Parent = torso
-                                    
-                                    -- Cloner et attacher GlowSpecs
-                                    if glowSpecs then
-                                        local clonedGlow = glowSpecs:Clone()
-                                        clonedGlow.Parent = attachment
-                                        clonedGlow.Enabled = true
-                                        
-                                        -- S'assurer que les propriétés sont correctes
-                                        if clonedGlow:IsA("ParticleEmitter") then
-                                            clonedGlow.Rate = clonedGlow.Rate > 0 and clonedGlow.Rate or 20
-                                            clonedGlow.Lifetime = NumberRange.new(1, 3)
-                                        end
-                                        
-                                        print("🎃 GlowSpecs appliqué sur " .. player.Name)
-                                    end
-                                    
-                                    -- Cloner et attacher fog33
-                                    if fog33 then
-                                        local clonedFog = fog33:Clone()
-                                        clonedFog.Parent = attachment
-                                        clonedFog.Enabled = true
-                                        
-                                        -- S'assurer que les propriétés sont correctes
-                                        if clonedFog:IsA("ParticleEmitter") then
-                                            clonedFog.Rate = clonedFog.Rate > 0 and clonedFog.Rate or 20
-                                            clonedFog.Lifetime = NumberRange.new(1, 3)
-                                        end
-                                        
-                                        print("🎃 fog33 appliqué sur " .. player.Name)
-                                    end
-                                    
-                                    -- Debug: vérifier que tout est bien en place
-                                    print("📍 Attachment créé sur:", torso.Name, "Position:", torso.Position)
-                                    print("📊 Nombre d'effets dans l'attachment:", #attachment:GetChildren())
-                                    
-                                    -- Nettoyer après 5 secondes
-                                    task.delay(5, function()
-                                        if attachment and attachment.Parent then 
-                                            attachment:Destroy() 
-                                        end
-                                    end)
-                                end)
-                            end)
-                        end
-                        
-                        -- Appliquer sur tous les joueurs existants
-                        for _, player in pairs(Players:GetPlayers()) do
-                            if player.Character then
-                                ApplyHalloweenEffect(player)
-                            end
-                            
-                            player.CharacterAdded:Connect(function()
-                                task.wait(0.5)
-                                ApplyHalloweenEffect(player)
-                            end)
-                        end
-                        
-                        -- Appliquer sur les nouveaux joueurs
-                        KillEffectConnection = Players.PlayerAdded:Connect(function(player)
-                            player.CharacterAdded:Connect(function()
-                                task.wait(0.5)
-                                ApplyHalloweenEffect(player)
-                            end)
-                            
-                            if player.Character then
-                                ApplyHalloweenEffect(player)
-                            end
-                        end)
-                    end)
-                    
-                    if not success then
-                        warn("Erreur Kill Effect: " .. tostring(err))
-                    end
-                else
-                    print("❌ Kill Effect Halloween désactivé")
-                end
-            end)
-
+            -- Kill Effects are now managed in the dedicated Kill FX tab
             -- 🛡️ ANTI AFK ROBUSTE
+            do
             local AntiAfkConnection = nil
             local AntiAfkThread = nil
 
@@ -3299,6 +4103,961 @@ local function ApplySpeedHack()
             if MiscSettings.AntiAFK then
                 EnableAntiAFK()
             end
+
+            end
+            -- ⚡ FAST ROLL / ROLL SKIP (BYPASS ANIMATION DE CAISSE)
+            do
+            local RollSkipHooked = false
+            local function SetupRollSkip()
+                if RollSkipHooked then return end
+                RollSkipHooked = true
+
+                -- 1. Hook direct sur le module ReplicatedStorage.GamePasses
+                pcall(function()
+                    local RS = game:GetService("ReplicatedStorage")
+                    local GPModule = RS:FindFirstChild("GamePasses")
+                    if GPModule then
+                        local GamePasses = require(GPModule)
+                        if type(GamePasses) == "table" and type(GamePasses.Owned) == "function" then
+                            local origOwned = GamePasses.Owned
+                            GamePasses.Owned = function(player, id, ...)
+                                if MiscSettings.RollSkip and (id == "SkipRolls" or id == 3720365490 or tostring(id):find("Skip")) then
+                                    return true
+                                end
+                                return origOwned(player, id, ...)
+                            end
+                        end
+                    end
+                end)
+
+                -- 2. Hook direct sur le module ReplicatedStorage.RollSkip
+                pcall(function()
+                    local RS = game:GetService("ReplicatedStorage")
+                    local RSModule = RS:FindFirstChild("RollSkip")
+                    if RSModule then
+                        local RollSkip = require(RSModule)
+                        if type(RollSkip) == "table" then
+                            if type(RollSkip.Owned) == "function" then
+                                local origOwned = RollSkip.Owned
+                                RollSkip.Owned = function(...)
+                                    if MiscSettings.RollSkip then return true end
+                                    return origOwned(...)
+                                end
+                            end
+                            if type(RollSkip.Request) == "function" then
+                                local origRequest = RollSkip.Request
+                                RollSkip.Request = function(callback, ...)
+                                    if MiscSettings.RollSkip and type(callback) == "function" then
+                                        callback()
+                                        return
+                                    end
+                                    return origRequest(callback, ...)
+                                end
+                            end
+                        end
+                    end
+                end)
+
+                -- 3. Bypass via hookfunction si disponible sur l'exécuteur
+                pcall(function()
+                    if hookfunction then
+                        local RS = game:GetService("ReplicatedStorage")
+                        local RSModule = RS:FindFirstChild("RollSkip")
+                        if RSModule then
+                            local RollSkip = require(RSModule)
+                            if type(RollSkip.Owned) == "function" then
+                                hookfunction(RollSkip.Owned, function(...)
+                                    if MiscSettings.RollSkip then return true end
+                                    return false
+                                end)
+                            end
+                            if type(RollSkip.Request) == "function" then
+                                hookfunction(RollSkip.Request, function(callback, ...)
+                                    if MiscSettings.RollSkip and type(callback) == "function" then
+                                        callback()
+                                        return
+                                    end
+                                end)
+                            end
+                        end
+                    end
+                end)
+
+                -- 4. Surveillance continue et auto-skip sur l'UI des Rolls (BetaRoll / Cases / RollTimer)
+                task.spawn(function()
+                    while true do
+                        task.wait(0.1)
+                        if MiscSettings.RollSkip then
+                            pcall(function()
+                                local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+                                if pGui then
+                                    -- Écoute / skip sur BetaRoll
+                                    local betaRoll = pGui:FindFirstChild("BetaRoll")
+                                    if betaRoll and betaRoll.Enabled then
+                                        local timer = betaRoll:FindFirstChild("RollTimer", true)
+                                        if timer and timer:IsA("GuiObject") then
+                                            timer.Visible = false
+                                        end
+                                    end
+                                    -- Écoute / skip des sons d'animation
+                                    local cases = pGui:FindFirstChild("Cases")
+                                    if cases then
+                                        local rollTick = cases:FindFirstChild("RollTick", true)
+                                        if rollTick and rollTick:IsA("Sound") and rollTick.IsPlaying then
+                                            rollTick:Stop()
+                                        end
+                                    end
+                                end
+                            end)
+                        end
+                    end
+                end)
+            end
+
+            AddToggle(gbOther, "⚡ Roll Skip (Fast Open)", MiscSettings.RollSkip, function(v)
+                MiscSettings.RollSkip = v
+                if v then
+                    SetupRollSkip()
+                    print("✅ Roll Skip activé : animation des caisses zappée instantanément !")
+                else
+                    print("❌ Roll Skip désactivé")
+                end
+            end)
+            end
+            -- 🍀 UP CHANCE / MAX LUCK BOOSTER (ReplicatedStorage.WeaponCases)
+            do
+            local WeaponCasesOriginalOdds = nil
+            local WeaponCasesHooked = false
+            local RarePriority = {
+                "DRAGON",
+                "RPG",
+                "AWP",
+                "Eagle",
+                "RiotShield",
+                "M60",
+                "SPAS12",
+                "M4",
+                "AK",
+                "MP5",
+                "Uzi",
+                "SawedOff",
+                "M9"
+            }
+
+            local function SetupUpChance()
+                pcall(function()
+                    local RS = game:GetService("ReplicatedStorage")
+                    local WCModule = RS:FindFirstChild("WeaponCases")
+                    if not WCModule then return end
+
+                    local WeaponCases = require(WCModule)
+                    if type(WeaponCases) ~= "table" then return end
+
+                    -- 1. Sauvegarde des probabilités d'origine
+                    if not WeaponCasesOriginalOdds and WeaponCases.ODDS then
+                        WeaponCasesOriginalOdds = {}
+                        for caseType, list in pairs(WeaponCases.ODDS) do
+                            WeaponCasesOriginalOdds[caseType] = {}
+                            for item, rate in pairs(list) do
+                                WeaponCasesOriginalOdds[caseType][item] = rate
+                            end
+                        end
+                    end
+
+                    -- 2. Application ou restauration des probabilités
+                    local function ApplyBoostedOdds(enable)
+                        if not WeaponCases.ODDS then return end
+                        if enable then
+                            for caseType, list in pairs(WeaponCases.ODDS) do
+                                for item, _ in pairs(list) do
+                                    if item == "DRAGON" or item == "RPG" or item == "AWP" or item == "Eagle" or item == "RiotShield" then
+                                        list[item] = 100000.0
+                                    elseif item == "M60" or item == "SPAS12" or item == "M4" or item == "AK" then
+                                        list[item] = 50000.0
+                                    else
+                                        list[item] = 0.0001
+                                    end
+                                end
+                            end
+                        elseif WeaponCasesOriginalOdds then
+                            for caseType, list in pairs(WeaponCasesOriginalOdds) do
+                                if WeaponCases.ODDS[caseType] then
+                                    for item, rate in pairs(list) do
+                                        WeaponCases.ODDS[caseType][item] = rate
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    ApplyBoostedOdds(MiscSettings.UpChance)
+
+                    -- 3. Hooks des fonctions de tirage
+                    if not WeaponCasesHooked then
+                        WeaponCasesHooked = true
+
+                        -- Hook WeaponCases.Roll
+                        if type(WeaponCases.Roll) == "function" then
+                            local origRoll = WeaponCases.Roll
+                            WeaponCases.Roll = function(caseName, itemList, rng)
+                                if MiscSettings.UpChance and type(itemList) == "table" then
+                                    for _, rareItem in ipairs(RarePriority) do
+                                        for _, availableItem in pairs(itemList) do
+                                            if availableItem == rareItem then
+                                                return rareItem
+                                            end
+                                        end
+                                    end
+                                end
+                                return origRoll(caseName, itemList, rng)
+                            end
+
+                            if hookfunction then
+                                pcall(function()
+                                    hookfunction(origRoll, function(caseName, itemList, rng)
+                                        if MiscSettings.UpChance and type(itemList) == "table" then
+                                            for _, rareItem in ipairs(RarePriority) do
+                                                for _, availableItem in pairs(itemList) do
+                                                    if availableItem == rareItem then
+                                                        return rareItem
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        return origRoll(caseName, itemList, rng)
+                                    end)
+                                end)
+                            end
+                        end
+
+                        -- Hook WeaponCases.Pick
+                        if type(WeaponCases.Pick) == "function" then
+                            local origPick = WeaponCases.Pick
+                            WeaponCases.Pick = function(itemList, weightFunc, rng)
+                                if MiscSettings.UpChance and type(itemList) == "table" then
+                                    for _, rareItem in ipairs(RarePriority) do
+                                        for _, availableItem in pairs(itemList) do
+                                            if availableItem == rareItem then
+                                                return rareItem
+                                            end
+                                        end
+                                    end
+                                end
+                                return origPick(itemList, weightFunc, rng)
+                            end
+
+                            if hookfunction then
+                                pcall(function()
+                                    hookfunction(origPick, function(itemList, weightFunc, rng)
+                                        if MiscSettings.UpChance and type(itemList) == "table" then
+                                            for _, rareItem in ipairs(RarePriority) do
+                                                for _, availableItem in pairs(itemList) do
+                                                    if availableItem == rareItem then
+                                                        return rareItem
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        return origPick(itemList, weightFunc, rng)
+                                    end)
+                                end)
+                            end
+                        end
+
+                        -- Hook WeaponCases.Odds
+                        if type(WeaponCases.Odds) == "function" then
+                            local origOdds = WeaponCases.Odds
+                            WeaponCases.Odds = function(caseName, itemList)
+                                local res = origOdds(caseName, itemList)
+                                if MiscSettings.UpChance and type(res) == "table" then
+                                    for _, rareItem in ipairs({"DRAGON", "RPG", "AWP", "Eagle", "RiotShield", "M60", "SPAS12", "M4"}) do
+                                        if res[rareItem] then
+                                            res[rareItem] = 99.99
+                                        end
+                                    end
+                                end
+                                return res
+                            end
+
+                            if hookfunction then
+                                pcall(function()
+                                    hookfunction(origOdds, function(caseName, itemList)
+                                        local res = origOdds(caseName, itemList)
+                                        if MiscSettings.UpChance and type(res) == "table" then
+                                            for _, rareItem in ipairs({"DRAGON", "RPG", "AWP", "Eagle", "RiotShield", "M60", "SPAS12", "M4"}) do
+                                                if res[rareItem] then
+                                                    res[rareItem] = 99.99
+                                                end
+                                            end
+                                        end
+                                        return res
+                                    end)
+                                end)
+                            end
+                        end
+
+                        -- Surveillance continue pour maintenir le boost actif
+                        task.spawn(function()
+                            while true do
+                                task.wait(1)
+                                if MiscSettings.UpChance and WeaponCases and WeaponCases.ODDS then
+                                    pcall(function()
+                                        for caseType, list in pairs(WeaponCases.ODDS) do
+                                            if (list["DRAGON"] or 0) < 1000 then
+                                                ApplyBoostedOdds(true)
+                                                break
+                                            end
+                                        end
+                                    end)
+                                end
+                            end
+                        end)
+                    end
+                end)
+            end
+
+            AddToggle(gbOther, "🍀 Up Chance (Max Luck)", MiscSettings.UpChance, function(v)
+                MiscSettings.UpChance = v
+                SetupUpChance()
+                if v then
+                    print("🍀 Up Chance activé : Chances maximales sur Dragon, RPG, AWP, Eagle, RiotShield !")
+                else
+                    print("❌ Up Chance désactivé : Probabilités d'origine restaurées")
+                end
+            end)
+
+            end
+            -- 💀 KILL EFFECTS CATEGORY TAB (13 EFFECTS SYSTEM)
+            do
+                local RS = game:GetService("ReplicatedStorage")
+                local TweenService = game:GetService("TweenService")
+
+                local EffectsConfig = {
+                    Halloween = {
+                        Name = "Halloween",
+                        Emoji = "🎃",
+                        Folder = "Halloween",
+                        Sound = 138922654038066,
+                        Volume = 2.0,
+                        SoundNear = 200,
+                        SoundFar = 600,
+                        Color = Color3.fromRGB(255, 120, 20),
+                        Desc = "Brouillard d'Halloween, specs luisants & hurlement"
+                    },
+                    Fireworks = {
+                        Name = "Fireworks",
+                        Emoji = "🎆",
+                        Folder = "Fireworks",
+                        Sound = 81896082959124,
+                        Volume = 0.8,
+                        SoundNear = 50,
+                        SoundFar = 300,
+                        Color = Color3.fromRGB(255, 190, 60),
+                        Desc = "Feu d'artifice étincelant avec pop sonore"
+                    },
+                    LaunchedFirework = {
+                        Name = "Launched Firework",
+                        Emoji = "🚀",
+                        Folder = "LaunchedFirework",
+                        Sound = 81896082959124,
+                        Volume = 0.8,
+                        Launch = { Height = 45, Time = 0.8 },
+                        Color = Color3.fromRGB(255, 120, 60),
+                        Desc = "Roquette fusée ascendante et détonation en altitude"
+                    },
+                    Explosion = {
+                        Name = "Explosion",
+                        Emoji = "💥",
+                        Folder = "Explosion",
+                        Sound = 81896082959124,
+                        Volume = 1.0,
+                        Color = Color3.fromRGB(255, 110, 30),
+                        Desc = "Onde de choc explosive ardente"
+                    },
+                    Red = {
+                        Name = "Red",
+                        Emoji = "🩸",
+                        Folder = "Red",
+                        Color = Color3.fromRGB(220, 30, 40),
+                        Desc = "Aura cramoisie & gerbe de sang"
+                    },
+                    Aura = {
+                        Name = "Aura",
+                        Emoji = "🔮",
+                        Folder = "Aura",
+                        Color = Color3.fromRGB(150, 110, 255),
+                        Desc = "Flares d'énergie violette cosmique & particules"
+                    },
+                    Water = {
+                        Name = "Water",
+                        Emoji = "🌊",
+                        Folder = "Water",
+                        Color = Color3.fromRGB(60, 160, 255),
+                        Desc = "Gouttes d'eau scintillantes & éclaboussures"
+                    },
+                    Hearts = {
+                        Name = "Hearts",
+                        Emoji = "💖",
+                        Folder = "Hearts",
+                        Color = Color3.fromRGB(255, 90, 160),
+                        Desc = "Coeurs roses flottants & étincelles d'amour"
+                    },
+                    Butterflies = {
+                        Name = "Butterflies",
+                        Emoji = "🦋",
+                        Folder = "Butterflies",
+                        Color = Color3.fromRGB(120, 220, 255),
+                        Desc = "Nuée de papillons cyan lumineux"
+                    },
+                    Rainbow = {
+                        Name = "Rainbow",
+                        Emoji = "🌈",
+                        Folder = "Rainbow",
+                        Color = Color3.fromRGB(255, 220, 80),
+                        Desc = "Rayon spectral prismatique multicolore"
+                    },
+                    Cash = {
+                        Name = "Cash",
+                        Emoji = "💵",
+                        Folder = "Cash",
+                        Color = Color3.fromRGB(80, 220, 110),
+                        Desc = "Pluie de billets de banque & poussière dorée"
+                    },
+                    Fire = {
+                        Name = "Fire",
+                        Emoji = "🔥",
+                        Folder = "Fire",
+                        Color = Color3.fromRGB(255, 140, 30),
+                        Desc = "Flammes infernales & braises incandescentes"
+                    },
+                    Stars = {
+                        Name = "Stars",
+                        Emoji = "⭐",
+                        Folder = "Stars",
+                        Color = Color3.fromRGB(255, 240, 150),
+                        Desc = "Constellation stellaire dorée étincelante"
+                    }
+                }
+
+                local EffectsOrder = {
+                    "Halloween",
+                    "Fireworks",
+                    "LaunchedFirework",
+                    "Explosion",
+                    "Red",
+                    "Aura",
+                    "Water",
+                    "Hearts",
+                    "Butterflies",
+                    "Rainbow",
+                    "Cash",
+                    "Fire",
+                    "Stars"
+                }
+
+                local function PlayKillEffect(targetChar, effectKey, customPos)
+                    if not targetChar and not customPos then return end
+                    local effectData = EffectsConfig[effectKey] or EffectsConfig["Halloween"]
+
+                    local rootPos = nil
+                    if customPos and typeof(customPos) == "Vector3" then
+                        rootPos = customPos + Vector3.new(0, 1, 0)
+                    elseif targetChar and targetChar.Parent then
+                        local root = targetChar:FindFirstChild("HumanoidRootPart")
+                            or targetChar:FindFirstChild("Torso")
+                            or targetChar:FindFirstChild("UpperTorso")
+                            or targetChar:FindFirstChild("Head")
+                            or targetChar:FindFirstChildWhichIsA("BasePart")
+                        if root then
+                            rootPos = root.Position + Vector3.new(0, 1, 0)
+                        end
+                    end
+                    if not rootPos and customPos and typeof(customPos) == "Vector3" then
+                        rootPos = customPos + Vector3.new(0, 1, 0)
+                    end
+                    if not rootPos then return end
+
+                    local killFXFolder = RS:FindFirstChild("KillFX")
+                    local template = killFXFolder and killFXFolder:FindFirstChild(effectData.Folder or effectKey)
+
+                    local effectAttachment = Instance.new("Attachment")
+                    effectAttachment.Name = "UR_KillFX_Node"
+                    effectAttachment.WorldPosition = rootPos
+                    effectAttachment.Parent = workspace.Terrain
+
+                    if effectData.Launch then
+                        local launchHeight = effectData.Launch.Height or 45
+                        local launchTime = effectData.Launch.Time or 0.8
+
+                        local rocket = Instance.new("Part")
+                        rocket.Size = Vector3.new(0.4, 0.4, 0.4)
+                        rocket.Position = rootPos
+                        rocket.Anchored = true
+                        rocket.CanCollide = false
+                        rocket.Transparency = 1
+                        rocket.Parent = workspace
+
+                        effectAttachment.Parent = rocket
+
+                        local trail = Instance.new("ParticleEmitter")
+                        trail.Texture = "rbxassetid://243098098"
+                        trail.Rate = 40
+                        trail.Speed = NumberRange.new(2, 5)
+                        trail.Lifetime = NumberRange.new(0.4, 0.8)
+                        trail.Size = NumberSequence.new(0.4, 1.2)
+                        trail.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 1)})
+                        trail.Color = ColorSequence.new(Color3.fromRGB(255, 200, 100))
+                        trail.Parent = effectAttachment
+
+                        local tw = TweenService:Create(rocket, TweenInfo.new(launchTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                            Position = rootPos + Vector3.new(0, launchHeight, 0)
+                        })
+                        tw:Play()
+                        tw.Completed:Connect(function()
+                            trail.Enabled = false
+                            effectAttachment.Parent = workspace.Terrain
+                            effectAttachment.WorldPosition = rootPos + Vector3.new(0, launchHeight, 0)
+                            rocket:Destroy()
+
+                            local fwTemplate = killFXFolder and (killFXFolder:FindFirstChild("Fireworks") or template)
+                            if fwTemplate then
+                                for _, d in ipairs(fwTemplate:GetDescendants()) do
+                                    if d:IsA("ParticleEmitter") then
+                                        local pe = d:Clone()
+                                        pe.Parent = effectAttachment
+                                        pe.Enabled = true
+                                        pe:Emit(pe.Rate > 0 and math.clamp(pe.Rate, 25, 80) or 40)
+                                    elseif d:IsA("PointLight") then
+                                        local pl = d:Clone()
+                                        pl.Parent = effectAttachment
+                                    end
+                                end
+                            end
+                        end)
+                    else
+                        if template then
+                            for _, d in ipairs(template:GetDescendants()) do
+                                if d:IsA("ParticleEmitter") then
+                                    local pe = d:Clone()
+                                    pe.Parent = effectAttachment
+                                    pe.Enabled = true
+                                    pe:Emit(pe.Rate > 0 and math.clamp(pe.Rate, 20, 60) or 30)
+                                elseif d:IsA("PointLight") or d:IsA("Beam") then
+                                    local obj = d:Clone()
+                                    obj.Parent = effectAttachment
+                                end
+                            end
+                        end
+                    end
+
+                    if KillEffectsSettings.PlaySound and effectData.Sound then
+                        local sound = Instance.new("Sound")
+                        sound.SoundId = "rbxassetid://" .. tostring(effectData.Sound)
+                        sound.Volume = (effectData.Volume or 1) * (KillEffectsSettings.SoundVolume or 0.8)
+                        sound.RollOffMode = Enum.RollOffMode.InverseTapered
+                        sound.RollOffMinDistance = effectData.SoundNear or 30
+                        sound.RollOffMaxDistance = effectData.SoundFar or 500
+                        sound.Parent = effectAttachment
+                        sound:Play()
+                        sound.Ended:Connect(function()
+                            sound:Destroy()
+                        end)
+                    end
+
+                    task.delay(KillEffectsSettings.EffectDuration or 5, function()
+                        if effectAttachment and effectAttachment.Parent then
+                            effectAttachment:Destroy()
+                        end
+                    end)
+                end
+
+                -- Détection ultra-précise des tirs du joueur local (clic manuel, rafale maintenue, AutoFarm AutoShoot)
+                local localLastClickTime = 0
+                local isLocalMouseDown = false
+                pcall(function()
+                    Mouse.Button1Down:Connect(function()
+                        isLocalMouseDown = true
+                        localLastClickTime = tick()
+                    end)
+                    Mouse.Button1Up:Connect(function()
+                        isLocalMouseDown = false
+                    end)
+                end)
+
+                local function IsLocalShooting()
+                    if isLocalMouseDown then return true end
+                    local ok, pressed = pcall(function()
+                        return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+                    end)
+                    if ok and pressed then return true end
+                    if IsShooting then return true end
+                    local now = tick()
+                    if now - localLastClickTime < 1.8 then return true end
+                    if now - (LastShotTime or 0) < 1.8 then return true end
+                    if now - (LastAutoShootTime or 0) < 1.8 then return true end
+                    return false
+                end
+
+                -- Tables de suivi des dégâts et debounce
+                local KillFX_LastDmgBy = {}
+                local KillFX_BotHooked = {}
+                local KillFX_DeadHandled = {}
+
+                -- Système de liaison pour les Joueurs
+                local function BindPlayer(player)
+                    if not player or player == LocalPlayer then return end
+                    local function SetupChar(char)
+                        if not char then return end
+                        local hum = char:WaitForChild("Humanoid", 8)
+                        if not hum then return end
+                        local hrp = char:WaitForChild("HumanoidRootPart", 8)
+                        local uid = player.UserId
+                        local lastRecordedHP = hum.Health
+                        local lastCharPos = hrp and hrp.Position or nil
+
+                        local function TriggerPlayerKill()
+                            if KillFX_DeadHandled[uid] then return end
+                            if not KillEffectsSettings.Enabled then return end
+
+                            if KillEffectsSettings.OnlyMyKills then
+                                local lastDmgTime = KillFX_LastDmgBy[uid] or 0
+                                local recentDmg = (tick() - lastDmgTime <= 3.5)
+                                local shootingNow = IsLocalShooting()
+                                if not recentDmg and not shootingNow then
+                                    return
+                                end
+                            end
+
+                            KillFX_DeadHandled[uid] = true
+                            local spawnPos = (hrp and hrp.Parent and hrp.Position) or lastCharPos
+                            PlayKillEffect(char, KillEffectsSettings.SelectedEffect, spawnPos)
+                            KillFX_LastDmgBy[uid] = nil
+                        end
+
+                        hum.HealthChanged:Connect(function(newHP)
+                            if newHP < lastRecordedHP then
+                                if IsLocalShooting() then
+                                    KillFX_LastDmgBy[uid] = tick()
+                                end
+                            end
+                            lastRecordedHP = newHP
+                            if newHP <= 0 then
+                                TriggerPlayerKill()
+                            end
+                        end)
+
+                        hum.Died:Connect(function()
+                            TriggerPlayerKill()
+                        end)
+
+                        task.spawn(function()
+                            while char and char.Parent and not KillFX_DeadHandled[uid] do
+                                if hrp and hrp.Parent then
+                                    lastCharPos = hrp.Position
+                                end
+                                if hum and hum.Health <= 0 then
+                                    TriggerPlayerKill()
+                                    break
+                                end
+                                task.wait(0.1)
+                            end
+                        end)
+
+                        char.AncestryChanged:Connect(function(_, parent)
+                            if not parent and not KillFX_DeadHandled[uid] then
+                                local lastDmgTime = KillFX_LastDmgBy[uid] or 0
+                                if (lastRecordedHP <= 25) or (tick() - lastDmgTime < 2.0) then
+                                    TriggerPlayerKill()
+                                end
+                            end
+                        end)
+                    end
+
+                    if player.Character then task.spawn(SetupChar, player.Character) end
+                    player.CharacterAdded:Connect(function(char)
+                        KillFX_DeadHandled[player.UserId] = nil
+                        KillFX_LastDmgBy[player.UserId] = nil
+                        task.spawn(SetupChar, char)
+                    end)
+                end
+
+                for _, p in pairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer then BindPlayer(p) end
+                end
+                Players.PlayerAdded:Connect(BindPlayer)
+                Players.PlayerRemoving:Connect(function(p)
+                    KillFX_LastDmgBy[p.UserId] = nil
+                    KillFX_DeadHandled[p.UserId] = nil
+                end)
+
+                -- Système de liaison pour les Bots (HoodLocal / Farm Bots)
+                local function HookBot(bot)
+                    if not bot or not bot:IsA("Model") then return end
+                    if KillFX_BotHooked[bot] then return end
+                    KillFX_BotHooked[bot] = true
+
+                    local hum = bot:FindFirstChildOfClass("Humanoid")
+                    local hrp = bot:FindFirstChild("HumanoidRootPart") or bot:FindFirstChildWhichIsA("BasePart")
+                    local lastRecordedHP = hum and hum.Health or 100
+                    local lastBotPos = hrp and hrp.Position or nil
+                    local hasDied = false
+
+                    local function TriggerBotKill()
+                        if hasDied then return end
+                        if not KillEffectsSettings.Enabled or not KillEffectsSettings.ApplyToBots then return end
+
+                        if KillEffectsSettings.OnlyMyKills then
+                            local lastDmgTime = KillFX_LastDmgBy[bot] or 0
+                            local recentDmg = (tick() - lastDmgTime <= 4.0)
+                            local isAttacking = IsLocalShooting() or AutoFarmSettings.Enabled
+                            if not recentDmg and not isAttacking then
+                                return
+                            end
+                        end
+
+                        hasDied = true
+                        local spawnPos = (hrp and hrp.Parent and hrp.Position) or lastBotPos
+                        PlayKillEffect(bot, KillEffectsSettings.SelectedEffect, spawnPos)
+                        KillFX_LastDmgBy[bot] = nil
+                        KillFX_BotHooked[bot] = nil
+                    end
+
+                    local function SetupBotHum(h)
+                        hum = h
+                        lastRecordedHP = h.Health
+                        h.HealthChanged:Connect(function(newHP)
+                            if newHP < lastRecordedHP then
+                                if IsLocalShooting() or AutoFarmSettings.Enabled then
+                                    KillFX_LastDmgBy[bot] = tick()
+                                end
+                            end
+                            lastRecordedHP = newHP
+                            if newHP <= 0 then
+                                TriggerBotKill()
+                            end
+                        end)
+                        h.Died:Connect(function()
+                            TriggerBotKill()
+                        end)
+                    end
+
+                    if hum then
+                        SetupBotHum(hum)
+                    else
+                        local conn
+                        conn = bot.ChildAdded:Connect(function(child)
+                            if child:IsA("Humanoid") then
+                                conn:Disconnect()
+                                SetupBotHum(child)
+                            end
+                        end)
+                    end
+
+                    task.spawn(function()
+                        while bot and bot.Parent and not hasDied do
+                            if hrp and hrp.Parent then
+                                lastBotPos = hrp.Position
+                            end
+                            if hum and (hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead) then
+                                TriggerBotKill()
+                                break
+                            end
+                            task.wait(0.1)
+                        end
+                    end)
+
+                    bot.AncestryChanged:Connect(function(_, parent)
+                        if not parent and not hasDied then
+                            local lastDmgTime = KillFX_LastDmgBy[bot] or 0
+                            if (lastRecordedHP <= 35) or (tick() - lastDmgTime < 2.5) or AutoFarmSettings.Enabled then
+                                TriggerBotKill()
+                            end
+                        end
+                    end)
+                end
+
+                local function ScanAllBots()
+                    local hl = workspace:FindFirstChild("HoodLocal")
+                    if hl then
+                        for _, child in ipairs(hl:GetChildren()) do
+                            if child:IsA("Model") and not KillFX_BotHooked[child] then
+                                pcall(HookBot, child)
+                            end
+                        end
+                    end
+                    for _, child in ipairs(workspace:GetChildren()) do
+                        if child:IsA("Model") and (child.Name:match("^Hood") or child.Name:match("^Zombie")) and not KillFX_BotHooked[child] then
+                            pcall(HookBot, child)
+                        end
+                    end
+                end
+
+                local function SetupHoodListener(hl)
+                    if not hl then return end
+                    hl.ChildAdded:Connect(function(child)
+                        if child:IsA("Model") then
+                            task.wait(0.05)
+                            pcall(HookBot, child)
+                        end
+                    end)
+                end
+
+                task.spawn(function()
+                    local hl = workspace:FindFirstChild("HoodLocal")
+                    if hl then
+                        SetupHoodListener(hl)
+                    end
+                    workspace.ChildAdded:Connect(function(child)
+                        if child.Name == "HoodLocal" then
+                            task.wait(0.1)
+                            SetupHoodListener(child)
+                            ScanAllBots()
+                        elseif child:IsA("Model") and (child.Name:match("^Hood") or child.Name:match("^Zombie")) then
+                            task.wait(0.05)
+                            pcall(HookBot, child)
+                        end
+                    end)
+
+                    ScanAllBots()
+
+                    while true do
+                        task.wait(2)
+                        if KillEffectsSettings.Enabled and KillEffectsSettings.ApplyToBots then
+                            pcall(ScanAllBots)
+                        end
+                    end
+                end)
+
+                -- 🎛️ UI : Colonne Gauche (Configuration & Test)
+                local gbConfig = AddGroupbox(TabKillEffects.left, "⚙️ Kill Effect Settings")
+                AddToggle(gbConfig, "💀 Enable Kill Effects", KillEffectsSettings.Enabled, function(v)
+                    KillEffectsSettings.Enabled = v
+                    if v then
+                        print("💀 Kill Effects activés : Mode [" .. tostring(KillEffectsSettings.SelectedEffect) .. "]")
+                    else
+                        print("❌ Kill Effects désactivés")
+                    end
+                end)
+                AddToggle(gbConfig, "🔊 Play Sound FX", KillEffectsSettings.PlaySound, function(v)
+                    KillEffectsSettings.PlaySound = v
+                end)
+                AddSlider(gbConfig, "Sound Volume", KillEffectsSettings.SoundVolume * 10, 1, 10, function(v)
+                    KillEffectsSettings.SoundVolume = v / 10
+                end)
+                AddSlider(gbConfig, "Effect Duration", KillEffectsSettings.EffectDuration, 2, 10, function(v)
+                    KillEffectsSettings.EffectDuration = v
+                end)
+                AddToggle(gbConfig, "👥 Apply to All Deaths", KillEffectsSettings.ApplyToAll, function(v)
+                    KillEffectsSettings.ApplyToAll = v
+                end)
+                AddToggle(gbConfig, "🎯 Only My Kills", KillEffectsSettings.OnlyMyKills, function(v)
+                    KillEffectsSettings.OnlyMyKills = v
+                end)
+                AddToggle(gbConfig, "🤖 Apply to Farm Bots", KillEffectsSettings.ApplyToBots, function(v)
+                    KillEffectsSettings.ApplyToBots = v
+                end)
+
+                local gbTest = AddGroupbox(TabKillEffects.left, "🧪 Test & Status")
+
+                local statusWrap = Instance.new("Frame", gbTest)
+                statusWrap.Size = UDim2.new(1, 0, 0, 42)
+                statusWrap.BackgroundTransparency = 1
+
+                local activeEffectLbl = Instance.new("TextLabel", statusWrap)
+                activeEffectLbl.Size = UDim2.new(1, -8, 0, 18)
+                activeEffectLbl.Position = UDim2.new(0, 4, 0, 2)
+                activeEffectLbl.BackgroundTransparency = 1
+                activeEffectLbl.TextColor3 = C.textPri
+                activeEffectLbl.Font = Enum.Font.GothamBold
+                activeEffectLbl.TextSize = 12
+                activeEffectLbl.TextXAlignment = Enum.TextXAlignment.Left
+                activeEffectLbl.Text = "Actif : 🎃 Halloween"
+
+                local descLbl = Instance.new("TextLabel", statusWrap)
+                descLbl.Size = UDim2.new(1, -8, 0, 18)
+                descLbl.Position = UDim2.new(0, 4, 0, 22)
+                descLbl.BackgroundTransparency = 1
+                descLbl.TextColor3 = C.textSec
+                descLbl.Font = Enum.Font.Gotham
+                descLbl.TextSize = 10
+                descLbl.TextXAlignment = Enum.TextXAlignment.Left
+                descLbl.Text = "Brouillard d'Halloween, specs luisants & hurlement"
+
+                local testBtn = Instance.new("TextButton", gbTest)
+                testBtn.Size = UDim2.new(1, -8, 0, 32)
+                testBtn.Position = UDim2.new(0, 4, 0, 48)
+                testBtn.BackgroundColor3 = C.accent
+                testBtn.Text = "💥 Tester l'effet sur soi"
+                testBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                testBtn.Font = Enum.Font.GothamBold
+                testBtn.TextSize = 12
+                testBtn.BorderSizePixel = 0
+                Instance.new("UICorner", testBtn).CornerRadius = UDim.new(0, 5)
+
+                testBtn.MouseButton1Click:Connect(function()
+                    if LocalPlayer.Character then
+                        PlayKillEffect(LocalPlayer.Character, KillEffectsSettings.SelectedEffect)
+                        print("💥 Test de l'effet [" .. tostring(KillEffectsSettings.SelectedEffect) .. "] déclenché !")
+                    else
+                        warn("❌ Personnage introuvable pour le test")
+                    end
+                end)
+
+                -- 🎛️ UI : Colonne Droite (Sélecteur des 13 Kill Effects)
+                local gbSelect = AddGroupbox(TabKillEffects.right, "✨ Choisir Kill Effect (13 Effets)")
+                local effectButtons = {}
+
+                local function UpdateSelection(selectedKey)
+                    KillEffectsSettings.SelectedEffect = selectedKey
+                    local data = EffectsConfig[selectedKey] or EffectsConfig["Halloween"]
+                    activeEffectLbl.Text = "Actif : " .. data.Emoji .. " " .. data.Name
+                    descLbl.Text = data.Desc or ""
+
+                    for key, btn in pairs(effectButtons) do
+                        if key == selectedKey then
+                            btn.BackgroundColor3 = C.accent
+                            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                        else
+                            btn.BackgroundColor3 = C.element
+                            btn.TextColor3 = C.textPri
+                        end
+                    end
+                    print("✨ Kill Effect sélectionné : " .. data.Emoji .. " " .. data.Name)
+                end
+
+                for _, effectKey in ipairs(EffectsOrder) do
+                    local effectData = EffectsConfig[effectKey]
+                    local row = Instance.new("Frame", gbSelect)
+                    row.Size = UDim2.new(1, 0, 0, 26)
+                    row.BackgroundTransparency = 1
+
+                    local btn = Instance.new("TextButton", row)
+                    btn.Size = UDim2.new(1, -8, 1, -2)
+                    btn.Position = UDim2.new(0, 4, 0, 1)
+                    btn.BackgroundColor3 = (effectKey == KillEffectsSettings.SelectedEffect) and C.accent or C.element
+                    btn.BorderSizePixel = 0
+                    btn.Text = "  " .. effectData.Emoji .. "  " .. effectData.Name
+                    btn.TextColor3 = (effectKey == KillEffectsSettings.SelectedEffect) and Color3.fromRGB(255, 255, 255) or C.textPri
+                    btn.Font = Enum.Font.GothamSemibold
+                    btn.TextSize = 11
+                    btn.TextXAlignment = Enum.TextXAlignment.Left
+                    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+
+                    local indicator = Instance.new("Frame", btn)
+                    indicator.Size = UDim2.new(0, 8, 0, 8)
+                    indicator.Position = UDim2.new(1, -14, 0.5, -4)
+                    indicator.BackgroundColor3 = effectData.Color or Color3.fromRGB(255, 255, 255)
+                    indicator.BorderSizePixel = 0
+                    Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
+
+                    effectButtons[effectKey] = btn
+
+                    btn.MouseButton1Click:Connect(function()
+                        UpdateSelection(effectKey)
+                    end)
+                end
+            end
+
             local gbAutoFarm = AddGroupbox(TabAutoFarm.left, "🤖 Bot Farming")
             local toggleAutoFarmUI
             toggleAutoFarmUI = AddToggle(gbAutoFarm, "Enable Auto Farm [X]", AutoFarmSettings.Enabled, function(v) 
@@ -3322,6 +5081,9 @@ local function ApplySpeedHack()
             end)
             AddToggle(gbAutoFarm, "❄️ Freeze NPCs", AutoFarmSettings.FreezeNPCs, function(v) 
                 AutoFarmSettings.FreezeNPCs = v
+            end)
+            AddSlider(gbAutoFarm, "Max Kill Distance", AutoFarmSettings.MaxKillDistance, 5, 50, function(v) 
+                AutoFarmSettings.MaxKillDistance = v
             end)
             
             local gbNPCConfig = AddGroupbox(TabAutoFarm.right, "⚙️ NPC Configuration")
@@ -3354,7 +5116,7 @@ local function ApplySpeedHack()
             
             -- 👤 MODEL CHANGER SECTION
             local gbCustomSkin = AddGroupbox(TabModelChanger.left, "Custom Skin")
-            AddToggle(gbCustomSkin, "👔 Custom Skin", MiscSettings.ModelChanger, function(v) 
+            AddToggle(gbCustomSkin, "?? Custom Skin", MiscSettings.ModelChanger, function(v) 
                 MiscSettings.ModelChanger = v
                 if v then
                     ApplyModelChanger()
@@ -3362,14 +5124,55 @@ local function ApplySpeedHack()
                     CleanupSkin()
                 end
             end)
+            
+            -- Saisie du Skin ID personnalis
+            do
+                local skinIdWrap = Instance.new("Frame", gbCustomSkin)
+                skinIdWrap.Size = UDim2.new(1, 0, 0, 38)
+                skinIdWrap.BackgroundTransparency = 1
+                local skinIdLbl = Instance.new("TextLabel", skinIdWrap)
+                skinIdLbl.Text = "Skin ID :"
+                skinIdLbl.Size = UDim2.new(1, -4, 0, 14)
+                skinIdLbl.Position = UDim2.new(0, 4, 0, 0)
+                skinIdLbl.BackgroundTransparency = 1
+                skinIdLbl.TextColor3 = C.textPri
+                skinIdLbl.Font = Enum.Font.Gotham
+                skinIdLbl.TextSize = 11
+                skinIdLbl.TextXAlignment = Enum.TextXAlignment.Left
+                
+                local skinIdBox = Instance.new("TextBox", skinIdWrap)
+                skinIdBox.Size = UDim2.new(1, -8, 0, 20)
+                skinIdBox.Position = UDim2.new(0, 4, 0, 16)
+                skinIdBox.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+                skinIdBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+                skinIdBox.Font = Enum.Font.GothamSemibold
+                skinIdBox.TextSize = 11
+                skinIdBox.Text = MiscSettings.SelectedSkinID
+                skinIdBox.ClearTextOnFocus = false
+                skinIdBox.BorderSizePixel = 0
+                Instance.new("UICorner", skinIdBox).CornerRadius = UDim.new(0, 4)
+                skinIdBox.FocusLost:Connect(function()
+                    MiscSettings.SelectedSkinID = skinIdBox.Text
+                    if MiscSettings.ModelChanger then
+                        ApplyModelChanger()
+                    end
+                end)
+            end
+            
             AddSlider(gbCustomSkin, "Skin Position Y", MiscSettings.SkinOffsetY * 10, 0, 100, function(v) 
                 MiscSettings.SkinOffsetY = v / 10
                 if MiscSettings.ModelChanger and SkinWeld then
-                    SkinWeld.C1 = CFrame.new(0, -MiscSettings.SkinOffsetY, 0)
+                    if SkinHandleAtt then
+                        SkinHandleAtt.CFrame = CFrame.new(0.001, 1.15 - MiscSettings.SkinOffsetY, -0.328, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+                        SkinWeld.C1 = SkinHandleAtt.CFrame
+                    else
+                        SkinWeld.C1 = CFrame.new(0, -MiscSettings.SkinOffsetY, 0)
+                    end
                 end
             end)
 
-            local gbBatmanSkin = AddGroupbox(TabModelChanger.right, "Batman Skinchanger (beta)")
+            do
+                local gbBatmanSkin = AddGroupbox(TabModelChanger.right, "Batman Skinchanger (beta)")
             local batToggleBtn = Instance.new("TextButton")
             batToggleBtn.Parent = gbBatmanSkin
             batToggleBtn.Size = UDim2.new(1, -8, 0, 30)
@@ -3413,66 +5216,73 @@ local function ApplySpeedHack()
                 end
             end)
 
+            end
             -- 🚀 TELEPORT SECTION
+            do
             local gbTeleport = AddGroupbox(TabTeleport.left, "📍 Locations")
             
             local isTeleporting = false
-            local pendingTeleportLocation = nil
-            
-            -- Fonction pour tuer le personnage et téléporter au respawn
-            local function KillAndTeleport(locationName)
-                if isTeleporting then return end
-                
-                local myChar = LocalPlayer.Character
-                if not myChar then 
-                    warn("❌ Personnage introuvable")
-                    return 
-                end
-                
-                local targetLocation = workspace.FarmZones.Volumes:FindFirstChild(locationName)
-                if not targetLocation then
-                    warn("❌ Location introuvable : " .. locationName)
+            -- TP DIRECT REPETE (comme avant, direct direct plusieurs fois)
+            local function UrbanSafeTeleport(targetPos, locationName, onComplete)
+                if isTeleporting then
+                    warn("? Arrt de la tlportation.")
+                    isTeleporting = false
                     return
                 end
                 
-                isTeleporting = true
-                pendingTeleportLocation = targetLocation.Position + Vector3.new(0, 3, 0)
+                local myChar = LocalPlayer.Character
+                if not myChar then return end
                 
-                -- Connexion pour téléporter DÈS le respawn
-                local respawnConnection
-                respawnConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
-                    task.wait(0.1) -- Petit délai pour que le personnage soit bien chargé
+                local hrp = myChar:FindFirstChild("HumanoidRootPart")
+                local humanoid = myChar:FindFirstChildOfClass("Humanoid")
+                if not hrp or not humanoid then return end
+                
+                isTeleporting = true
+                local targetCFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+                
+                local seat = humanoid.SeatPart
+                local vehicle = seat and seat:FindFirstAncestorOfClass("Model")
+                
+                if seat and vehicle then
+                    print("?? [Vehicle TP] Rafale active : TP toutes les 1 seconde tant que tu es dans le vhicule...")
                     
-                    local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
-                    if hrp and pendingTeleportLocation then
-                        -- TÉLÉPORTATION IMMÉDIATE AU RESPAWN (anti-TP pas encore actif)
-                        for i = 1, 5 do
-                            if hrp and hrp.Parent then
-                                hrp.CFrame = CFrame.new(pendingTeleportLocation)
-                                hrp.Velocity = Vector3.zero
-                                hrp.AssemblyLinearVelocity = Vector3.zero
-                                task.wait()
+                    task.spawn(function()
+                        while isTeleporting do
+                            if not humanoid or humanoid.Health <= 0 then break end
+                            if not vehicle or not vehicle.Parent then break end
+                            
+                            -- Vrifier si le serveur a retir le joueur du vhicule
+                            if not humanoid.SeatPart and not humanoid.Sit then
+                                task.wait(0.2)
+                                if not humanoid.SeatPart and not humanoid.Sit then
+                                    print("?? Sorti du vhicule ! Fin du TP.")
+                                    break
+                                end
                             end
+                            
+                            -- TP DIRECT du vhicule
+                            vehicle:PivotTo(targetCFrame)
+                            
+                            local rootPart = vehicle.PrimaryPart or humanoid.SeatPart
+                            if rootPart and rootPart:IsA("BasePart") then
+                                rootPart.AssemblyLinearVelocity = Vector3.zero
+                                rootPart.AssemblyAngularVelocity = Vector3.zero
+                            end
+                            
+                            -- Rpte toutes les 1 seconde
+                            task.wait(1)
                         end
                         
-                        print("✅ Téléporté à " .. locationName .. " au respawn !")
-                    end
-                    
-                    -- Nettoyer
-                    pendingTeleportLocation = nil
+                        isTeleporting = false
+                        if onComplete then task.spawn(onComplete, myChar, hrp, humanoid) end
+                    end)
+                else
+                    --  pied : TP direct simple
+                    hrp.CFrame = targetCFrame
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
                     isTeleporting = false
-                    if respawnConnection then
-                        respawnConnection:Disconnect()
-                        respawnConnection = nil
-                    end
-                end)
-                
-                -- KILL le personnage
-                task.wait(0.1)
-                local humanoid = myChar:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid.Health = 0
-                    print("⚡ Respawn en cours...")
+                    if onComplete then task.spawn(onComplete, myChar, hrp, humanoid) end
                 end
             end
             
@@ -3490,7 +5300,12 @@ local function ApplySpeedHack()
             Instance.new("UICorner", btnHangar).CornerRadius = UDim.new(0, 6)
             
             btnHangar.MouseButton1Click:Connect(function()
-                KillAndTeleport("Cour_Hangar")
+                local targetLocation = workspace.FarmZones.Volumes:FindFirstChild("Cour_Hangar")
+                if not targetLocation then
+                    warn("❌ Location introuvable : Cour_Hangar")
+                    return
+                end
+                UrbanSafeTeleport(targetLocation.Position + Vector3.new(0, 3, 0), "Cour_Hangar")
             end)
             
             -- Bouton Teleport to GunStore
@@ -3507,16 +5322,8 @@ local function ApplySpeedHack()
             Instance.new("UICorner", btnGunStore).CornerRadius = UDim.new(0, 6)
             
             btnGunStore.MouseButton1Click:Connect(function()
-                -- Fonction spéciale pour GunStore avec le bon chemin
                 if isTeleporting then return end
                 
-                local myChar = LocalPlayer.Character
-                if not myChar then 
-                    warn("❌ Personnage introuvable")
-                    return 
-                end
-                
-                -- Chemin exact : Workspace/SafeZones/GunStore/Limites/Cercle_Trappe
                 local safeZones = workspace:FindFirstChild("SafeZones")
                 if not safeZones then
                     warn("❌ SafeZones introuvable dans Workspace")
@@ -3541,7 +5348,6 @@ local function ApplySpeedHack()
                     return
                 end
                 
-                -- Cercle_Trappe est un Model, on doit trouver une part dedans
                 local targetPart = cercleTrappe.PrimaryPart or cercleTrappe:FindFirstChildWhichIsA("BasePart")
                 if not targetPart then
                     warn("❌ Aucune part trouvée dans Cercle_Trappe")
@@ -3549,45 +5355,7 @@ local function ApplySpeedHack()
                 end
                 
                 local targetPosition = targetPart.Position + Vector3.new(0, 3, 0)
-                
-                isTeleporting = true
-                pendingTeleportLocation = targetPosition
-                
-                print("⚡ Téléportation vers GunStore...")
-                
-                -- Connexion pour téléporter au respawn
-                local respawnConnection
-                respawnConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
-                    task.wait(0.1)
-                    
-                    local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
-                    if hrp and pendingTeleportLocation then
-                        for i = 1, 5 do
-                            if hrp and hrp.Parent then
-                                hrp.CFrame = CFrame.new(pendingTeleportLocation)
-                                hrp.Velocity = Vector3.zero
-                                hrp.AssemblyLinearVelocity = Vector3.zero
-                                task.wait()
-                            end
-                        end
-                        
-                        print("✅ Téléporté au GunStore !")
-                    end
-                    
-                    pendingTeleportLocation = nil
-                    isTeleporting = false
-                    if respawnConnection then
-                        respawnConnection:Disconnect()
-                        respawnConnection = nil
-                    end
-                end)
-                
-                -- KILL le personnage
-                task.wait(0.1)
-                local humanoid = myChar:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid.Health = 0
-                end
+                UrbanSafeTeleport(targetPosition, "GunStore")
             end)
             
             -- Bouton TP to Loot (caché dans le premier model de l'airdrop)
@@ -3596,7 +5364,7 @@ local function ApplySpeedHack()
             btnTPLoot.Size = UDim2.new(1, -10, 0, 25)
             btnTPLoot.Position = UDim2.new(0, 5, 0, 65)
             btnTPLoot.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-            btnTPLoot.Text = "� TP to Loot (Hidden)"
+            btnTPLoot.Text = "📦 TP to Loot (Hidden)"
             btnTPLoot.TextColor3 = Color3.fromRGB(255, 255, 255)
             btnTPLoot.Font = Enum.Font.GothamSemibold
             btnTPLoot.TextSize = 14
@@ -3609,20 +5377,12 @@ local function ApplySpeedHack()
                     return 
                 end
                 
-                local myChar = LocalPlayer.Character
-                if not myChar then 
-                    warn("❌ Personnage introuvable")
-                    return 
-                end
-                
-                -- Trouver les airdrops
                 local airdropSpots = workspace:FindFirstChild("AirdropSpots")
                 if not airdropSpots then
                     warn("❌ AirdropSpots introuvable")
                     return
                 end
                 
-                -- Trouver le premier CompassPOI avec un AirdropPlane AU SOL
                 local targetAirdrop = nil
                 local airdropPlane = nil
                 
@@ -3630,9 +5390,8 @@ local function ApplySpeedHack()
                     if poi.Name:match("^CompassPOI") then
                         local plane = poi:FindFirstChild("AirdropPlane")
                         if plane then
-                            -- Vérifier que le plane est au sol (Y position basse)
                             local planePart = plane.PrimaryPart or plane:FindFirstChildWhichIsA("BasePart")
-                            if planePart and planePart.Position.Y < 50 then -- Au sol si Y < 50
+                            if planePart and planePart.Position.Y < 50 then
                                 targetAirdrop = poi
                                 airdropPlane = plane
                                 break
@@ -3646,7 +5405,6 @@ local function ApplySpeedHack()
                     return
                 end
                 
-                -- Trouver le premier model dans le POI (pour se cacher)
                 local hideModel = nil
                 for _, child in ipairs(targetAirdrop:GetChildren()) do
                     if child:IsA("Model") and child.Name ~= "AirdropPlane" then
@@ -3660,7 +5418,6 @@ local function ApplySpeedHack()
                     return
                 end
                 
-                -- Trouver une part solide pour se cacher dedans
                 local hidePart = hideModel.PrimaryPart or hideModel:FindFirstChildWhichIsA("BasePart")
                 if not hidePart then
                     warn("❌ Aucune part trouvée dans le model")
@@ -3670,95 +5427,51 @@ local function ApplySpeedHack()
                 print("🎯 Airdrop AU SOL trouvé: " .. targetAirdrop.Name)
                 print("🏠 Cachette: " .. hideModel.Name)
                 
-                -- Position de la cachette
                 local hidePos = hidePart.Position
                 
-                isTeleporting = true
-                pendingTeleportLocation = hidePos
-                
-                print("⚡ Kill + Respawn vers l'airdrop...")
-                
-                -- Connexion pour TP au respawn
-                local respawnConnection
-                respawnConnection = LocalPlayer.CharacterAdded:Connect(function(newChar)
-                    task.wait(0.2) -- Attendre que le perso soit bien chargé
+                UrbanSafeTeleport(hidePos, "Airdrop Loot", function(newChar, hrp, humanoid)
+                    task.wait(0.2)
                     
-                    local hrp = newChar:WaitForChild("HumanoidRootPart", 5)
-                    local humanoid = newChar:WaitForChild("Humanoid", 5)
-                    
-                    if hrp and pendingTeleportLocation then
-                        -- TP à l'intérieur du model (caché)
-                        for i = 1, 5 do
-                            if hrp and hrp.Parent then
-                                hrp.CFrame = CFrame.new(pendingTeleportLocation)
-                                hrp.Velocity = Vector3.zero
-                                hrp.AssemblyLinearVelocity = Vector3.zero
-                                task.wait()
-                            end
-                        end
-                        
-                        print("✅ TP dans la cachette!")
-                        
-                        task.wait(0.2)
-                        
-                        -- Se mettre COUCHÉ (proned)
-                        if humanoid then
-                            pcall(function()
-                                local VirtualInputManager = game:GetService("VirtualInputManager")
-                                -- Appuyer sur CTRL pour se coucher
-                                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
-                                task.wait(0.1)
-                                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
-                            end)
-                            
-                            print("🛏️ Couché!")
-                        end
-                        
-                        task.wait(0.3)
-                        
-                        -- HOLD E pendant 5 secondes pour looter
+                    -- Se mettre COUCHÉ (proned)
+                    if humanoid then
                         pcall(function()
                             local VirtualInputManager = game:GetService("VirtualInputManager")
-                            print("📦 HOLD E pour looter...")
-                            
-                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                            task.wait(5) -- HOLD pendant 5 secondes
-                            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                            
-                            print("✅ Loot terminé!")
+                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+                            task.wait(0.1)
+                            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
                         end)
+                        print("🛏️ Couché!")
                     end
                     
-                    -- Nettoyer
-                    pendingTeleportLocation = nil
-                    isTeleporting = false
-                    if respawnConnection then
-                        respawnConnection:Disconnect()
-                        respawnConnection = nil
-                    end
+                    task.wait(0.3)
+                    
+                    -- HOLD E pendant 5 secondes pour looter
+                    pcall(function()
+                        local VirtualInputManager = game:GetService("VirtualInputManager")
+                        print("📦 HOLD E pour looter...")
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        task.wait(5)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        print("✅ Loot terminé!")
+                    end)
                 end)
-                
-                -- KILL le personnage pour respawn
-                task.wait(0.1)
-                local humanoid = myChar:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid.Health = 0
-                    print("💀 Respawn en cours...")
-                end
             end)
             
-            local gbAutoFarmInfo = AddGroupbox(TabAutoFarm.right, "📊 Info")
+            end
+            do
+                local gbAutoFarmInfo = AddGroupbox(TabAutoFarm.right, "📊 Info")
             local infoText = Instance.new("TextLabel")
             infoText.Parent = gbAutoFarmInfo
             infoText.Size = UDim2.new(1, -10, 0, 60)
             infoText.Position = UDim2.new(0, 5, 0, 5)
             infoText.BackgroundTransparency = 1
-            infoText.Text = "Cible les bots dans\nWorkspace/HoodLocal\n(Hood1, Hood2, etc.)"
+            infoText.Text = "Cible les bots dans\nWorkspace/HoodLocal\n(Zombie1, Zombie2, Hood, etc.)"
             infoText.TextColor3 = Color3.fromRGB(200, 200, 200)
             infoText.TextSize = 14
             infoText.Font = Enum.Font.SourceSans
             infoText.TextWrapped = true
             infoText.TextYAlignment = Enum.TextYAlignment.Top
+            end
             UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 if not gameProcessed and input.KeyCode == Enum.KeyCode.Insert then
                     ScreenGui.Enabled = not ScreenGui.Enabled
